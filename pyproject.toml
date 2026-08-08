@@ -1,0 +1,40 @@
+[project]
+name = "mcmouse"
+version = "0.1.0"
+description = "迈从（MCHOSE）A7 系列鼠标的 macOS 菜单栏配置软件"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "hidapi>=0.14.0",
+    "typer>=0.12.0",
+]
+
+[project.scripts]
+mcmouse = "mcmouse.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcmouse"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: 需要真机连接的测试，默认跳过，用 --runlive 显式运行",
+]
+
+[tool.ruff]
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "COM"]
+ignore = ["COM812"]  # 与 formatter 冲突

@@ -1,0 +1,15 @@
+# 2026-08-08 真机样本：旧协议写 DPI（0x12 0x40）原样写回
+# 设备：MCHOSE A7 V2 Pro+（2.4G 接收器 1K，VID 0x3837 PID 0x100A）
+# 固件：鼠标 5.42.0.9 / 接收器 5.15.0.9
+# 环境：macOS (Apple Silicon) + hidapi，usage_page 0xFF01 接口
+# 关联知识库：kb/0005 §3.1（写 DPI 布局）、kb/0007（休眠坑）
+#
+# 写入内容：dpis=(400, 800, 1193, 1600, 6400, 26000)，当前档索引 2，6 档，
+#           Y 轴未独立（dpiVal 复制 X）。写入后读回整份配置（0x12 0x67）逐字段一致。
+#
+# 线上字节（含 reportId 0x12，payload 已按 kb/0003 §2 取反）：
+12bffdfdff6ffedffc56fbbff9ffe66f9af9006ffedffc56fbbff9ffe66f9affffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+#
+# 解码对照（取反后，不含 reportId）：
+# 40 | 02 02 00 | 9001 2003 a904 4006 0019 9065 | 06 | ff | 9001 2003 a904 4006 0019 9065
+# 子命令 | usb/g索引,res | dpi0-5 u16LE            | sum | diff| dpiVal0-5（Y 轴复制 X）

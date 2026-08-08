@@ -1,0 +1,15 @@
+# 逆向工作区（官方文件，禁止入库与分发）
+_reverse/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# 工具
+.ruff_cache/
+.pytest_cache/
+.DS_Store

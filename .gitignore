@@ -13,3 +13,7 @@ build/
 .ruff_cache/
 .pytest_cache/
 .DS_Store
+
+*.exe
+*.dmg
+*.zip

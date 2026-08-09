@@ -22,6 +22,8 @@ class DeviceVariant:
 
 # 见 kb/devices/0002 的 A7 系列全量表与 PID 角色表
 KNOWN_VARIANTS: tuple[DeviceVariant, ...] = (
+    # A7 V2 Pro（旧协议；有线 PID 16408 经真机确认，kb/0002）
+    DeviceVariant("MCHOSE A7 V2 Pro", 14391, 16408, "wired", "old", "8k"),
     # A7 V2 Pro+（旧协议；pids = [有线, 1K 接收器, 8K 接收器, 8K(VID 21075)]）
     DeviceVariant("MCHOSE A7 V2 Pro+", 14391, 16419, "wired", "old", "8k"),
     DeviceVariant("MCHOSE A7 V2 Pro+", 14391, 4106, "receiver-1k", "old", "1k"),
@@ -57,6 +59,9 @@ class ModelCaps:
 
 MODEL_CAPS: dict[str, ModelCaps] = {
     # kb/0003 §6（Xf 表）
+    "MCHOSE A7 V2 Pro": ModelCaps(
+        26000, (200, 1200, 2200, 3200, 4200, 26000), {1: "1mm", 2: "2mm"}
+    ),  # 参数按同代 Pro+ 推断，待 kb 登记核实
     "MCHOSE A7 V2 Pro+": ModelCaps(
         26000, (200, 1200, 2200, 3200, 4200, 26000), {1: "1mm", 2: "2mm"}
     ),

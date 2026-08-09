@@ -92,6 +92,16 @@ date: 2026-08-08
 
 工具：`scripts/probe_hid.py`、`scripts/probe_feature_reports.py`。
 
+### 2026-08-09 · 有线模式与固件升级
+
+1. **verified**：有线模式 PID=0x4018（16408，A7 V2 Pro 本体标识），product/serial
+   "MCHOSE A7 V2 Pro / 0123456789A"。已登记进 `mcmouse.devices`。
+   注：本机市场名为 A7 V2 Pro+，MCU 自报为 A7 V2 Pro（+ 或仅表示捆绑 8K 接收器）。
+2. **固件升级 5.42.0.9 → 5.42.2.4**（用户经官方 App 升级）：读协议与配置布局不变
+   （DPI 表、回报率等读回一致）；**宏引擎在新固件恢复工作，事件编码回归官方
+   bundle 的"预取反"形态**（kb/0007 §7 结案）。
+3. 电量读数随充电状态变化正常（77%，充电中 chargeStatus=1）。
+
 ## 注意
 
 - **A7 V1（A7 / A7 Pro，非 V2/V3）未出现在当前 Web 驱动注册表中**。

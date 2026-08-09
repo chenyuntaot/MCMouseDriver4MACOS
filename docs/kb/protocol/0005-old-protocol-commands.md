@@ -38,8 +38,8 @@ LOD 2mm、防抖 8、休眠 3 分钟），与设备表现一致。休眠时返�
 | 偏移 | 长度 | 字段 | 编码 |
 |---|---|---|---|
 | 0 | 1 | profileIndex | 当前板载配置索引 |
-| 1 | 1 | 高4位=gDpiIndex，低4位=gRateIndex | 2.4G 侧 DPI 档/回报率档索引 |
-| 2 | 1 | 高4位=usbDpiIndex，低4位=usbRateIndex | 有线侧索引 |
+| 1 | 1 | 高4位=usbRateIndex，低4位=usbDpiIndex | **有线侧**（真机仲裁，kb/0007 §6；与官方 parser 声明相反） |
+| 2 | 1 | 高4位=gRateIndex，低4位=gDpiIndex | **2.4G 侧**（同上当） |
 | 3 | 1 | reserved | |
 | 4-15 | 12 | dpi0-dpi5 | u16 LE ×6，**真实 DPI 值，无缩放** |
 | 16 | 1 | dpiSum | 有效档位数（1-6） |
@@ -63,7 +63,11 @@ LOD 2mm、防抖 8、休眠 3 分钟），与设备表现一致。休眠时返�
 真机验证（2026-08-08，A7 V2 Pro+，固件 5.42.0.9）：将读出的 DPI 表原样写回，
 读回逐字段一致。样本：`tests/captures/20260808_live_dpi-writeback.hex`。
 
-### 3.2 写回报率 `0x11 0x41`（schema `hMt` 76774，调用 136302-136309）
+### 3.2 写回报率 `0x11 0x41`（schema `hMt` 76774，调用 136302-136309）**【verified】**
+
+真机验证（2026-08-09）：`{usbRate:0, freeRate:1}` 后 byte2 高4位 2→1（500Hz），
+`{usbRate:1, freeRate:0}` 在无线连接下被忽略（usbRate 仅下线路由生效）。
+规律：byte2 = [freeRate(高4) | usbRate(低4)]。
 
 逻辑数据：`usbRate, freeRate`。有线发 `{usbRate: idx, freeRate: 0}`；
 2.4G 发 `{usbRate: 0, freeRate: idx}`。idx 为当前 PID 对应 rate 列表的索引。
@@ -82,7 +86,10 @@ Hz 映射表（`ta` 88949，**无 250Hz**）：
 设备用哪个列表：`Xf[型号].rate[pids.indexOf(当前PID)]`（136011-136032）。
 A7 V2 Pro+：有线(16419)=8K 列表，接收器 4106=1K 列表，4107/4128=8K 列表。
 
-### 3.3 写性能参数 `0x11 0x42`（schema `uMt` 76762，调用 136251+）
+### 3.3 写性能参数 `0x11 0x42`（schema `uMt` 76762，调用 136251+）**【verified】**
+
+真机验证（2026-08-09）：以读回全量为底、仅改 ripple=1 写入，byte17 0x02→0x06
+（bit2 置位），其余字节不变；恢复后一致。全量回写方式安全。
 
 逻辑数据 9 字节：`lod, ripple, line, motionSync, reserved, reserved2, gameMode, rotateOpen, rotateVal`。
 **写入编码与读回位掩码不同**：
@@ -96,8 +103,8 @@ A7 V2 Pro+：有线(16419)=8K 列表，接收器 4106=1K 列表，4107/4128=8K �
 
 | 命令 | 用途 | 逻辑数据 | 出处 |
 |---|---|---|---|
-| `0x11 0x0A` | 休眠 | `sleepStatus(1=启用/0=从不), sleep(分钟)` | 76753, 136173 |
-| `0x11 0x43` | 按键防抖 | `time`（uint8，0-20） | 76758, 136214 |
+| `0x11 0x0A` | 休眠 **【verified】** | `sleepStatus(1=启用/0=从不), sleep(分钟)`；真机：byte19 3→5→3 | 76753, 136173 |
+| `0x11 0x43` | 按键防抖 **【verified】** | `time`（uint8，0-20）；真机：byte18 8→12→8 | 76758, 136214 |
 | `0x11 0x58` | 切板载配置 | `profileIndex` | 79096 |
 | `0x11 0x0B` | **恢复出厂** | `AA 00`（u16 BE=43520） | 76843, 138062 |
 | `0x12 0x57` | 全量配置写 | 与 0x67 响应同构 62 字节，**nibble 顺序与读相反**（byte1 高4=usbRateIndex 低4=usbDpiIndex；byte2 高4=gRateIndex 低4=gDpiIndex），val=255 | mMt 76779, 78240 |
@@ -124,3 +131,11 @@ A7 V2 Pro+：有线(16419)=8K 列表，接收器 4106=1K 列表，4107/4128=8K �
 ## 修订记录
 
 - 2026-08-08 初版（Web bundle 静态分析；§1/§2 布局已对照 parser 源码逐字段核对）。
+- 2026-08-08 §1/§2/§3.1 真机验证通过（A7 V2 Pro+，固件 5.42.0.9）；
+  §3.2/§3.3/§3.4 当日仅做幂等验证，次日发现校验读错字节位置（见下条）。
+- 2026-08-08 §2 按键区 nibble 顺序修正：高4位=buttonIndex、低4位=buttonType
+  （真机仲裁，见 kb/0007 §4）。
+- 2026-08-09 §2 byte1/2 布局修正（真机仲裁，见 kb/0007 §6）：
+  byte1=[usbRate|usbDpi]、byte2=[gRate|gDpi]，与官方 parser 声明完全相反；
+  §3.2/§3.3/§3.4 随之真机验证通过（0x11 短包写实际一直有效，此前是读回
+  校验读错了字节位置）。

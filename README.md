@@ -36,6 +36,20 @@ PAW3395/PAW3950 传感器，三模（有线 / 2.4G 接收器 / 蓝牙），最�
 
 固件 OTA 升级为二期内容（一期不做）。完整需求见 `docs/requirements.md`。
 
+## 使用
+
+```bash
+uv sync                 # 安装依赖（首次）
+uv run mcmouse gui      # 启动菜单栏应用（A7 图标出现在菜单栏）
+uv run mcmouse --help   # CLI：list/info/dpi/rate/sensor/sleep/debounce/button/macro
+uv run pytest           # 离线测试（真机测试加 --runlive）
+```
+
+菜单栏应用：点击 A7 图标弹层（电量/固件/DPI 档位/回报率快捷切换），
+「设置面板…」里有 DPI/性能/按键/宏/命名配置的完整界面。
+注：macOS 27 上 Qt 原生托盘菜单有崩溃 bug（QTBUG-147449），
+弹层为自绘绕行实现（kb/0008）。
+
 ## 仓库结构
 
 ```
@@ -55,8 +69,8 @@ PAW3395/PAW3950 传感器，三模（有线 / 2.4G 接收器 / 蓝牙），最�
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
 | M0 | 解包官方软件、建立知识库、项目文档 | 完成 |
-| M1 | 从 Web bundle 逆向 A7 协议，协议库 + CLI 跑通真机读写 | 进行中（读/写 DPI 已验证） |
-| M2 | macOS 菜单栏应用（PySide6 accessory 模式，无 Dock 图标） | 未开始 |
+| M1 | 从 Web bundle 逆向 A7 协议，协议库 + CLI 跑通真机读写 | 完成 |
+| M2 | macOS 菜单栏应用（PySide6 accessory 模式，无 Dock 图标） | 完成 |
 | M3 | 打包分发（.app）、打磨 | 未开始 |
 
 ## 法律与免责声明

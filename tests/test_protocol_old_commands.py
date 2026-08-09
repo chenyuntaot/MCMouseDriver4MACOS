@@ -15,20 +15,20 @@ def _make_response(report_id: int, subcmd: int, payload: bytes) -> bytes:
 # 人工构造的 63 字节配置数据（kb/0005 §2 布局）
 CONFIG_PAYLOAD = (
     bytes([0x00])  # profileIndex
-    + bytes([0x32])  # gDpiIndex=3, gRateIndex=2
-    + bytes([0x21])  # usbDpiIndex=2, usbRateIndex=1
+    + bytes([0x32])  # usbRateIndex=3, usbDpiIndex=2（kb/0007 §6 仲裁后布局）
+    + bytes([0x21])  # gRateIndex=2, gDpiIndex=1
     + bytes([0x00])  # reserved
     + b"".join(d.to_bytes(2, "little") for d in (400, 800, 1600, 3200, 6400, 26000))
     + bytes([0x06])  # dpiSum
     + bytes([0x15])  # sensor：lod=1, ripple=1, line=0, motionSync=1, 电竞=0
     + bytes([0x04])  # keyDebounce
     + bytes([0x0A])  # sleep 10 分钟
-    + bytes([0x10, 0x01, 0x00, 0x00])  # 键0：type=1 index=0 value=0x010000
-    + bytes([0x20, 0x02, 0x00, 0x00])  # 键1
-    + bytes([0x00, 0x00, 0x00, 0x00])  # 键2
-    + bytes([0x00, 0x00, 0x00, 0x00])  # 键3
-    + bytes([0x01, 0x04, 0x00, 0x00])  # 键4：type=0 index=1
-    + bytes([0x00, 0x00, 0x00, 0x00])  # 键5
+    + bytes([0x10, 0x01, 0x00, 0x00])  # 键区0：index=1 type=0 value=0x010000
+    + bytes([0x20, 0x02, 0x00, 0x00])  # 键区1：index=2 type=0
+    + bytes([0x00, 0x00, 0x00, 0x00])  # 键区2
+    + bytes([0x00, 0x00, 0x00, 0x00])  # 键区3
+    + bytes([0x01, 0x04, 0x00, 0x00])  # 键区4：index=0 type=1
+    + bytes([0x00, 0x00, 0x00, 0x00])  # 键区5
     + bytes(5)  # reserved1-5
     + bytes([0x02])  # rotateVal=2 → 8°
     + bytes([0xFF])  # val
@@ -43,10 +43,10 @@ def test_parse_config() -> None:
     assert subcmd == old.CMD_READ_CONFIG
     cfg = old.parse_config(payload)
     assert cfg.profile_index == 0
-    assert cfg.g_dpi_index == 3
-    assert cfg.g_rate_index == 2
+    assert cfg.usb_rate_index == 3
     assert cfg.usb_dpi_index == 2
-    assert cfg.usb_rate_index == 1
+    assert cfg.g_rate_index == 2
+    assert cfg.g_dpi_index == 1
     assert cfg.dpis == (400, 800, 1600, 3200, 6400, 26000)
     assert cfg.dpi_count == 6
     assert old.sensor_lod(cfg.sensor) == 1
@@ -57,13 +57,13 @@ def test_parse_config() -> None:
     assert cfg.key_debounce == 4
     assert cfg.sleep_minutes == 10
     assert cfg.buttons[0] == old.ButtonBinding(
-        button_type=1, button_index=0, value=0x010000
+        button_type=0, button_index=1, value=0x010000
     )
     assert cfg.buttons[1] == old.ButtonBinding(
-        button_type=2, button_index=0, value=0x020000
+        button_type=0, button_index=2, value=0x020000
     )
     assert cfg.buttons[4] == old.ButtonBinding(
-        button_type=0, button_index=1, value=0x040000
+        button_type=1, button_index=0, value=0x040000
     )
     assert cfg.rotate_degrees == 8
     assert cfg.val == 0xFF

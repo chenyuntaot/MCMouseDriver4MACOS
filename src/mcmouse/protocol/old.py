@@ -30,6 +30,7 @@ CMD_WRITE_SLEEP = 0x0A  # 写休眠
 CMD_WRITE_DEBOUNCE = 0x43  # 写按键防抖
 CMD_SWITCH_PROFILE = 0x58  # 切板载配置
 CMD_FACTORY_RESET = 0x0B  # 恢复出厂设置
+CMD_WRITE_CONFIG = 0x57  # 全量配置写（reportId 0x12，kb/0005 §3.4）
 
 
 def encode(payload: bytes) -> bytes:
@@ -124,10 +125,14 @@ def parse_device_info(payload: bytes) -> DeviceInfo:
 
 @dataclass(frozen=True)
 class ButtonBinding:
-    """单个按键绑定（kb/0005 §2 按键区，语义映射待 kb 按键条目补充）。"""
+    """单个按键绑定（kb/0005 §2 按键区，语义映射见 kb/0006 §1）。
 
-    button_type: int  # 高 4 位
-    button_index: int  # 低 4 位
+    nibble 顺序经真机仲裁（kb/0007 §4）：高4位=buttonIndex，低4位=buttonType，
+    与官方 parser 声明相反，以真机为准。
+    """
+
+    button_type: int  # 低 4 位
+    button_index: int  # 高 4 位
     value: int  # 3 字节 BE，如 0x010000=左键
 
 
@@ -136,10 +141,10 @@ class MouseConfig:
     """整份配置（kb/0005 §2，63 字节逻辑数据）。"""
 
     profile_index: int
-    g_dpi_index: int  # 2.4G 侧当前 DPI 档
-    g_rate_index: int  # 2.4G 侧当前回报率档
-    usb_dpi_index: int  # 有线侧当前 DPI 档
-    usb_rate_index: int  # 有线侧当前回报率档
+    usb_rate_index: int  # 有线侧回报率档（byte1 高4位，kb/0007 §6）
+    usb_dpi_index: int  # 有线侧 DPI 档（byte1 低4位）
+    g_rate_index: int  # 2.4G 侧回报率档（byte2 高4位）
+    g_dpi_index: int  # 2.4G 侧 DPI 档（byte2 低4位）
     dpis: tuple[int, ...]  # 6 档 DPI，真实值无缩放
     dpi_count: int  # 有效档位数
     sensor: int  # 位掩码，用下方 sensor_* 助手解读
@@ -169,8 +174,8 @@ def parse_config(payload: bytes) -> MouseConfig:
     )
     buttons = tuple(
         ButtonBinding(
-            button_type=payload[20 + i * 4] >> 4,
-            button_index=payload[20 + i * 4] & 0x0F,
+            button_type=payload[20 + i * 4] & 0x0F,  # 低4位=type（kb/0007 §4 仲裁）
+            button_index=payload[20 + i * 4] >> 4,  # 高4位=index
             value=int.from_bytes(payload[21 + i * 4 : 24 + i * 4], "big"),
         )
         for i in range(6)
@@ -180,10 +185,12 @@ def parse_config(payload: bytes) -> MouseConfig:
     )
     return MouseConfig(
         profile_index=payload[0],
-        g_dpi_index=payload[1] >> 4,
-        g_rate_index=payload[1] & 0x0F,
-        usb_dpi_index=payload[2] >> 4,
-        usb_rate_index=payload[2] & 0x0F,
+        # byte1/2 的字节序与 nibble 序均经真机仲裁（kb/0007 §6），
+        # 与官方 parser 声明相反，以真机为准
+        usb_rate_index=payload[1] >> 4,
+        usb_dpi_index=payload[1] & 0x0F,
+        g_rate_index=payload[2] >> 4,
+        g_dpi_index=payload[2] & 0x0F,
         dpis=dpis,
         dpi_count=payload[16],
         sensor=payload[17],
@@ -315,3 +322,65 @@ def build_factory_reset() -> tuple[int, bytes]:
     return REPORT_ID_SHORT, build_command(
         REPORT_ID_SHORT, CMD_FACTORY_RESET, bytes([0xAA, 0x00])
     )
+
+
+def build_write_sensor_from_config(
+    cfg: MouseConfig,
+    *,
+    lod: int | None = None,
+    ripple: bool | None = None,
+    line: bool | None = None,
+    motion_sync: bool | None = None,
+    game_mode: int | None = None,
+) -> tuple[int, bytes]:
+    """以当前配置为底、覆盖指定项的性能写命令（0x11 0x42，kb/0005 §3.3）。
+
+    官方"未提供字段由固件保持"只是推测（kb/0005 §3.3 风险项），
+    因此这里总是用读回的完整状态组包，避免把其他字段写成未知值。
+    """
+    sensor = cfg.sensor
+    lod_v = sensor_lod(sensor) if lod is None else lod
+    ripple_v = sensor_ripple(sensor) if ripple is None else ripple
+    line_v = sensor_line(sensor) if line is None else line
+    motion_v = sensor_motion_sync(sensor) if motion_sync is None else motion_sync
+    # 读回 0/1/2（位掩码），写入 1/2/3（kb/0005 §3.3）
+    game_v = sensor_game_mode(sensor) if game_mode is None else game_mode
+    rotate_open = 1 if cfg.rotate_raw else 0
+    rotate_val = cfg.rotate_raw if rotate_open else 0
+    return build_write_sensor(
+        lod_v,
+        SWITCH_ON if ripple_v else SWITCH_OFF,
+        SWITCH_ON if line_v else SWITCH_OFF,
+        SWITCH_ON if motion_v else SWITCH_OFF,
+        game_v + 1,
+        rotate_open,
+        rotate_val,
+    )
+
+
+def build_write_config(cfg: MouseConfig) -> tuple[int, bytes]:
+    """全量配置写（0x12 0x57，schema mMt 76779-76828，kb/0005 §3.4）。
+
+    布局与读（0x12 0x67 仲裁后）一致：byte1=[usbRate|usbDpi]、
+    byte2=[gRate|gDpi]、按键=[buttonIndex|buttonType]+u24 BE。
+    """
+    args = (
+        bytes(
+            [
+                cfg.profile_index,
+                cfg.usb_rate_index << 4 | cfg.usb_dpi_index,
+                cfg.g_rate_index << 4 | cfg.g_dpi_index,
+                0,  # reserved
+            ]
+        )
+        + b"".join(d.to_bytes(2, "little") for d in cfg.dpis)
+        + bytes([cfg.dpi_count, cfg.sensor, cfg.key_debounce, cfg.sleep_minutes])
+        + b"".join(
+            bytes([b.button_index << 4 | b.button_type]) + b.value.to_bytes(3, "big")
+            for b in cfg.buttons
+        )
+        + bytes(5)  # reserved1-5
+        + bytes([cfg.rotate_raw, cfg.val])
+        + b"".join(d.to_bytes(2, "little") for d in cfg.dpi_vals)
+    )
+    return REPORT_ID_LONG, build_command(REPORT_ID_LONG, CMD_WRITE_CONFIG, args)

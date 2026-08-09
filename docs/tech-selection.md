@@ -90,6 +90,11 @@
    设置面板承载完整配置 UI（滑块/色盘/键位捕获）。选 PySide6 而非 rumps，
    因为宏编辑器等面板需要完整控件体系；rumps 仅作 UI 收缩为纯菜单时的
    轻量备选。明确不使用 pywebview/WKWebView 等网页方案（用户要求）。
+
+   ⚠️ 实施修订（2026-08-09，kb/0008）：macOS 27 上 QSystemTrayIcon 原生菜单
+   点击必崩（QTBUG-147449，Qt ≤6.12 未修），托盘交互改为**自绘 Qt 弹层**
+   （纯 QWidget，不经 NSMenu）。同日评估过 SwiftUI 重写路线，**用户决定
+   继续 Qt**，SwiftUI 留作后备。
 4. **配置持久化**：本地 JSON 文件（`~/Library/Application Support/MCMouseDriver/`），
    支持导入/导出官方兼容格式（⚠ 官方配置格式待逆向确认）。
 

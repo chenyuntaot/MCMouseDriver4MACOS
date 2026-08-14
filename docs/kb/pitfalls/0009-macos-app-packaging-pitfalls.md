@@ -72,11 +72,19 @@ PySide6 装好有 1.2G，必须裁。Python 层 `excludes` 只管模块图，
 
 ## 备注：ad-hoc 签名的分发限制
 
-ad-hoc 签名只保证本机运行。DMG 拷到别的 Mac 上会被 Gatekeeper 隔离，
-需 `xattr -dr com.apple.quarantine /Applications/MCMouseDriver.app`
-或在「隐私与安全性」里放行。正式签名/公证需 Developer ID，
-脚本已留 `MCMOUSE_SIGN_IDENTITY` 入口。
+ad-hoc 签名只保证本机运行。DMG 经隔空投送 / 网盘 / U 盘拷到别的 Mac，
+会被打上 `com.apple.quarantine`，Gatekeeper 拒绝启动。对方可以：
+
+1. Control-点击 → 打开（首次）；
+2. 系统设置 → 隐私与安全性 → 「仍要打开」；
+3. `xattr -dr com.apple.quarantine /Applications/MCMouseDriver.app`。
+
+DMG 内附 `首次打开（必读）.txt`。双击即开需要 Developer ID + 公证
+（`MCMOUSE_SIGN_IDENTITY` + `notarytool` + `stapler`，见 README）。
+
+另：当前 `.app` 是 arm64 thin，Intel Mac 无法运行。
 
 ## 修订记录
 
 - 2026-08-14 初版（M3 打包）。
+- 2026-08-14 补充换机 Gatekeeper 放行步骤与架构限制。

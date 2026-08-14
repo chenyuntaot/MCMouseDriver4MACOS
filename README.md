@@ -39,16 +39,38 @@ PAW3395/PAW3950 传感器，三模（有线 / 2.4G 接收器 / 蓝牙），最�
 ## 安装（用打好的 DMG）
 
 打开 `MCMouseDriver-<版本>.dmg`，把 `MCMouseDriver.app` 拖到「应用程序」。
+当前包只打了 **Apple Silicon（M 系列）**，Intel Mac 跑不了；系统需 macOS 14+。
 
-DMG 里的 app 只做了 ad-hoc 签名（没有 Developer ID，未公证），
-**换到别的 Mac 首次打开会被 Gatekeeper 拦住**，去掉隔离属性即可：
+### 换到别的 Mac：系统会拦，这是正常的
+
+没有 Apple 开发者证书、也没做公证时，对方双击会看到
+「无法验证开发者」或「已损坏」。按下面任一方式放行即可：
+
+1. **右键打开**（推荐，不用终端）：按住 Control 点图标 → 打开 → 再点打开。
+2. **系统设置**：隐私与安全性 → 滚到最下面 → 「仍要打开」。
+3. **终端**：
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/MCMouseDriver.app
+open /Applications/MCMouseDriver.app
 ```
 
-启动后没有 Dock 图标，鼠标图标出现在菜单栏；点它看电量/DPI/回报率，
-「设置…」打开完整配置面板。若读不到设备，可用自检模式看具体报错：
+DMG 里也有一份 `首次打开（必读）.txt`，可以直接转给对方。
+
+想让别人**双击就能开**，需要加入 [Apple Developer Program](https://developer.apple.com/programs/)
+（每年 99 美元），用 Developer ID 签名并公证。有证书后：
+
+```bash
+export MCMOUSE_SIGN_IDENTITY="Developer ID Application: 你的名字 (TEAMID)"
+./packaging/build_dmg.sh
+xcrun notarytool submit dist/MCMouseDriver-*.dmg --keychain-profile notary --wait
+xcrun stapler staple dist/MCMouseDriver-*.dmg
+```
+
+`notarytool` 的钥匙串配置一次即可：`xcrun notarytool store-credentials notary`。
+
+启动后没有 Dock 图标，鼠标剪影出现在菜单栏；点它看电量/DPI/回报率，
+「设置…」打开完整配置面板。若读不到设备：
 
 ```bash
 /Applications/MCMouseDriver.app/Contents/MacOS/MCMouseDriver --selftest

@@ -69,6 +69,7 @@
   Developer ID，脚本留 `MCMOUSE_SIGN_IDENTITY` 环境变量入口。
 
 构建入口：`packaging/build_dmg.sh`（图标生成 → PyInstaller → 签名 → DMG）。
+分发说明（首次打开、签名与公证）见 `docs/packaging.md`。
 
 ## 3. 逆向工程工具链
 

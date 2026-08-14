@@ -35,6 +35,7 @@ MCMouseDriver/
 ├── docs/
 │   ├── requirements.md  # 需求分析
 │   ├── tech-selection.md# 技术选型方案
+│   ├── packaging.md     # 安装包构建、签名与公证
 │   └── kb/              # 知识库（规则见第二部分）
 ├── src/mcmouse/         # 产品代码（协议库 + CLI + GUI）
 ├── tests/               # pytest 测试与录制的报文样本

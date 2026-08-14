@@ -14,15 +14,16 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal
-from PySide6.QtGui import QIcon, QPainter, QPixmap
+from PySide6.QtGui import QCursor, QFont, QGuiApplication, QPainter
 from PySide6.QtWidgets import (
     QApplication,
-    QFrame,
+    QButtonGroup,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSystemTrayIcon,
     QVBoxLayout,
+    QWidget,
 )
 
 from .devices import DeviceVariant
@@ -31,6 +32,21 @@ from .profiles import save_profile
 from .protocol.old import RATE_TABLES, MouseConfig
 from .session import OldProtocolSession
 from .transport import HidInterface, pick_config_interface
+from .ui import (
+    POPOVER_WIDTH,
+    POPUP_SHADOW,
+    BatteryView,
+    Hairline,
+    apply_macos_app,
+    caption,
+    format_hz,
+    make_tray_icon,
+    menu_row,
+    paint_popover,
+    pill_button,
+    popup_stylesheet,
+    style_label,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -164,23 +180,6 @@ class DeviceWorker(QThread):
         return self._snapshot(session)
 
 
-def _make_icon() -> QIcon:
-    """程序化生成菜单栏图标（模板图，自动适配深浅菜单栏）。"""
-    pix = QPixmap(22, 22)
-    pix.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pix)
-    painter.setPen(Qt.GlobalColor.black)
-    font = painter.font()
-    font.setPixelSize(13)
-    font.setBold(True)
-    painter.setFont(font)
-    painter.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, "A7")
-    painter.end()
-    icon = QIcon(pix)
-    icon.setIsMask(True)
-    return icon
-
-
 def _set_accessory_policy() -> None:
     """把进程切成 accessory（无 Dock 图标）。仅 macOS；打包后由 Info.plist 兜底。"""
     if sys.platform != "darwin":
@@ -199,95 +198,167 @@ def _set_accessory_policy() -> None:
         pass
 
 
-class TrayPopup(QFrame):
+class TrayPopup(QWidget):
     """托盘弹层（替代 NSMenu，kb/0008）：状态 + DPI/回报率快捷切换。"""
 
     def __init__(
         self, submit: Callable[..., None], on_panel: Callable[[], None]
     ) -> None:
-        super().__init__(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        super().__init__(
+            None,
+            Qt.WindowType.Popup
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint,
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedWidth(POPOVER_WIDTH + POPUP_SHADOW * 2)
         self._submit = submit
+        self._apply_style()
+        QGuiApplication.styleHints().colorSchemeChanged.connect(
+            lambda _: self._apply_style()
+        )
+        pad = POPUP_SHADOW + 14
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(pad, pad - 2, pad, pad)
+        layout.setSpacing(8)
 
-        self._title = QLabel("MCMouseDriver")
-        font = self._title.font()
-        font.setBold(True)
-        self._title.setFont(font)
-        layout.addWidget(self._title)
-        self._info = QLabel("")
-        layout.addWidget(self._info)
+        head = QVBoxLayout()
+        head.setSpacing(2)
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(2, 0, 2, 0)
+        self._title = style_label(
+            QLabel("MCMouseDriver"), size=13, weight=QFont.Weight.DemiBold
+        )
+        self._title.setWordWrap(True)
+        title_row.addWidget(self._title, 1)
+        self._battery = BatteryView()
+        self._battery.hide()
+        title_row.addWidget(self._battery, 0, Qt.AlignmentFlag.AlignTop)
+        head.addLayout(title_row)
+        self._info = caption("")
+        self._info.setContentsMargins(2, 0, 2, 0)
+        head.addWidget(self._info)
+        layout.addLayout(head)
 
-        layout.addWidget(QLabel("DPI 档位"))
-        self._dpi_row = QHBoxLayout()
-        layout.addLayout(self._dpi_row)
-        layout.addWidget(QLabel("回报率"))
-        self._rate_row = QHBoxLayout()
-        layout.addLayout(self._rate_row)
+        self._dpi_label = caption("DPI")
+        layout.addWidget(self._dpi_label)
+        self._dpi_grid = QGridLayout()
+        self._dpi_grid.setSpacing(4)
+        self._dpi_group = QButtonGroup(self)
+        self._dpi_group.setExclusive(True)
+        layout.addLayout(self._dpi_grid)
 
-        actions = QHBoxLayout()
+        self._rate_label = caption("回报率")
+        layout.addWidget(self._rate_label)
+        self._rate_grid = QGridLayout()
+        self._rate_grid.setSpacing(4)
+        self._rate_group = QButtonGroup(self)
+        self._rate_group.setExclusive(True)
+        layout.addLayout(self._rate_grid)
+
+        layout.addWidget(Hairline())
+
         for text, fn in (
-            ("设置面板…", on_panel),
+            ("设置…", on_panel),
             ("刷新", lambda: submit("refresh")),
             ("退出", QApplication.instance().quit),
         ):
-            btn = QPushButton(text)
+            btn = menu_row(text)
             btn.clicked.connect(fn)
-            actions.addWidget(btn)
-        layout.addLayout(actions)
+            layout.addWidget(btn)
 
-    def _fill_row(
+    def _apply_style(self) -> None:
+        self.setStyleSheet(popup_stylesheet())
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: ANN001
+        del event
+        painter = QPainter(self)
+        paint_popover(self, painter)
+
+    def _fill_grid(
         self,
-        row: QHBoxLayout,
+        grid: QGridLayout,
+        group: QButtonGroup,
         items: list[str],
         current: int,
         on_pick: Callable[[int], None],
+        columns: int,
     ) -> None:
-        while row.count():
-            item = row.takeAt(0)
+        for btn in group.buttons():
+            group.removeButton(btn)
+        while grid.count():
+            item = grid.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        cols = max(columns, 1)
         for i, text in enumerate(items):
-            btn = QPushButton(text)
-            btn.setCheckable(True)
-            btn.setChecked(i == current)
+            btn = pill_button(text, i == current)
+            group.addButton(btn, i)
             btn.clicked.connect(lambda _=False, i=i: on_pick(i))
-            row.addWidget(btn)
+            grid.addWidget(btn, i // cols, i % cols)
+
+    def _clear_pills(self) -> None:
+        self._fill_grid(self._dpi_grid, self._dpi_group, [], -1, lambda i: None, 3)
+        self._fill_grid(self._rate_grid, self._rate_group, [], -1, lambda i: None, 4)
+
+    def show_error(self, message: str) -> None:
+        self._title.setText("未连接")
+        self._info.setText(message)
+        self._battery.hide()
+        self._clear_pills()
+        self._dpi_label.hide()
+        self._rate_label.hide()
+        self.adjustSize()
 
     def update_snapshot(self, snap: DeviceSnapshot | None) -> None:
         """按快照刷新弹层内容。"""
         if snap is None:
-            self._title.setText("读取设备中…")
-            self._info.setText("")
-            self._fill_row(self._dpi_row, [], -1, lambda i: None)
-            self._fill_row(self._rate_row, [], -1, lambda i: None)
+            self._title.setText("正在读取设备…")
+            self._info.setText("请用有线或 2.4G 接收器连接鼠标")
+            self._battery.hide()
+            self._dpi_label.hide()
+            self._rate_label.hide()
+            self._clear_pills()
+            self.adjustSize()
             return
         role = ROLE_NAMES.get(snap.variant.role, snap.variant.role)
-        self._title.setText(f"{snap.variant.model}（{role}）")
-        charge = " · 充电中" if snap.charge_status else ""
-        self._info.setText(f"固件 {snap.firmware} · 电量 {snap.battery}%{charge}")
+        self._title.setText(snap.variant.model)
+        self._info.setText(f"{role} · 固件 {snap.firmware}")
+        self._battery.set_battery(snap.battery, bool(snap.charge_status))
+        self._battery.show()
         cfg = snap.config
         wired = snap.variant.role == "wired"
         if cfg is None:
-            self._fill_row(self._dpi_row, ["休眠/未连接"], -1, lambda i: None)
-            self._fill_row(self._rate_row, [], -1, lambda i: None)
+            self._info.setText(f"{role} · 鼠标休眠，晃动后刷新")
+            self._dpi_label.hide()
+            self._rate_label.hide()
+            self._clear_pills()
+            self.adjustSize()
             return
+        self._dpi_label.show()
+        self._rate_label.show()
         dpi_cur = cfg.usb_dpi_index if wired else cfg.g_dpi_index
-        self._fill_row(
-            self._dpi_row,
-            [f"{cfg.dpis[i]}" for i in range(cfg.dpi_count)],
+        dpi_items = [f"{cfg.dpis[i]}" for i in range(cfg.dpi_count)]
+        self._fill_grid(
+            self._dpi_grid,
+            self._dpi_group,
+            dpi_items,
             dpi_cur,
             lambda i: self._submit("dpi_stage", i),
+            3 if len(dpi_items) > 3 else max(len(dpi_items), 1),
         )
         rates = RATE_TABLES[snap.variant.rate_table]
         rate_cur = cfg.usb_rate_index if wired else cfg.g_rate_index
-        self._fill_row(
-            self._rate_row,
-            [f"{hz}" for hz in rates],
+        self._fill_grid(
+            self._rate_grid,
+            self._rate_group,
+            [format_hz(hz) for hz in rates],
             rate_cur,
             lambda i: self._submit("rate", i),
+            4 if len(rates) >= 7 else 3,
         )
+        self.adjustSize()
 
 
 class TrayApp(QObject):
@@ -307,8 +378,8 @@ class TrayApp(QObject):
         self._popup = TrayPopup(self._worker.submit, self.show_panel)
         self._popup.update_snapshot(None)
 
-        self._tray = QSystemTrayIcon(_make_icon(), app)
-        self._tray.setToolTip("MCMouseDriver")
+        self._tray = QSystemTrayIcon(make_tray_icon(), app)
+        self._tray.setToolTip("A7")
         # 不设原生菜单（kb/0008：macOS 27 点击即崩），点击改弹 Qt 弹层
         self._tray.activated.connect(self._on_activated)
         self._tray.show()
@@ -324,10 +395,16 @@ class TrayApp(QObject):
             self._popup.hide()
             return
         self.refresh()
-        rect = self._tray.geometry()
         self._popup.adjustSize()
-        x = rect.x() + rect.width() // 2 - self._popup.width() // 2
-        self._popup.move(max(x, 8), rect.bottom() + 4)
+        rect = self._tray.geometry()
+        if not rect.isValid() or rect.isEmpty():
+            pos = QCursor.pos()
+            x = pos.x() - self._popup.width() // 2
+            y = pos.y() + 6
+        else:
+            x = rect.x() + rect.width() // 2 - self._popup.width() // 2
+            y = rect.bottom() - POPUP_SHADOW + 6
+        self._popup.move(max(x, 8), y)
         self._popup.show()
         self._popup.raise_()
 
@@ -341,10 +418,9 @@ class TrayApp(QObject):
             self._panel.on_snapshot(snap)
 
     def _on_failed(self, message: str) -> None:
-        if self._snapshot is None:
-            self._popup.update_snapshot(None)
+        self._popup.show_error(message)
         if self._panel is not None:
-            self._panel.statusBar().showMessage(message, 5000)
+            self._panel.show_error(message)
 
     def show_panel(self) -> None:
         self._popup.hide()
@@ -368,6 +444,7 @@ def run() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("MCMouseDriver")
     app.setQuitOnLastWindowClosed(False)
+    apply_macos_app(app)
     tray = TrayApp(app)
     app.aboutToQuit.connect(tray.quit)
     return app.exec()

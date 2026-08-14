@@ -39,7 +39,10 @@ MCMouseDriver/
 ├── src/mcmouse/         # 产品代码（协议库 + CLI + GUI）
 ├── tests/               # pytest 测试与录制的报文样本
 ├── scripts/             # 逆向/分析用一次性脚本
+├── packaging/           # 打包分发：PyInstaller spec、图标生成、DMG 构建脚本
 ├── _reverse/            # 逆向工作区：解包出的官方文件（不入库、不分发）
+├── build/               # 打包中间产物（不入库）
+├── dist/                # 打包产物 .app / .dmg（不入库）
 └── .venv/               # 虚拟环境（不入库）
 ```
 

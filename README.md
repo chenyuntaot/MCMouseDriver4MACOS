@@ -36,7 +36,25 @@ PAW3395/PAW3950 传感器，三模（有线 / 2.4G 接收器 / 蓝牙），最�
 
 固件 OTA 升级为二期内容（一期不做）。完整需求见 `docs/requirements.md`。
 
-## 使用
+## 安装（用打好的 DMG）
+
+打开 `MCMouseDriver-<版本>.dmg`，把 `MCMouseDriver.app` 拖到「应用程序」。
+
+DMG 里的 app 只做了 ad-hoc 签名（没有 Developer ID，未公证），
+**换到别的 Mac 首次打开会被 Gatekeeper 拦住**，去掉隔离属性即可：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/MCMouseDriver.app
+```
+
+启动后没有 Dock 图标，鼠标图标出现在菜单栏；点它看电量/DPI/回报率，
+「设置…」打开完整配置面板。若读不到设备，可用自检模式看具体报错：
+
+```bash
+/Applications/MCMouseDriver.app/Contents/MacOS/MCMouseDriver --selftest
+```
+
+## 从源码运行
 
 ```bash
 uv sync                 # 安装依赖（首次）
@@ -44,6 +62,16 @@ uv run mcmouse gui      # 启动菜单栏应用（A7 图标出现在菜单栏）
 uv run mcmouse --help   # CLI：list/info/dpi/rate/sensor/sleep/debounce/button/macro
 uv run pytest           # 离线测试（真机测试加 --runlive）
 ```
+
+## 打包
+
+```bash
+./packaging/build_dmg.sh      # 产出 dist/MCMouseDriver.app 与 dist/MCMouseDriver-<版本>.dmg
+```
+
+脚本依次做：生成图标 → PyInstaller 构建 .app → 签名 → `hdiutil` 打 DMG。
+有 Developer ID 时设 `MCMOUSE_SIGN_IDENTITY="Developer ID Application: …"`
+即改为正式签名。打包相关的坑见 `kb/0009`，选型论证见 `docs/tech-selection.md` §2.4。
 
 菜单栏应用：点击 A7 图标弹层（电量/固件/DPI 档位/回报率快捷切换），
 「设置面板…」里有 DPI/性能/按键/宏/命名配置的完整界面。
@@ -58,9 +86,10 @@ uv run pytest           # 离线测试（真机测试加 --runlive）
 │   ├── requirements.md   # 需求分析
 │   ├── tech-selection.md # 技术选型方案
 │   └── kb/               # 逆向知识库（协议结论都在这里登记）
-├── src/mcmouse/          # 产品代码（待建）
-├── tests/                # 测试与报文样本（待建）
-├── scripts/              # 逆向分析脚本（待建）
+├── src/mcmouse/          # 产品代码（协议库 + CLI + 菜单栏 GUI）
+├── tests/                # 测试与报文样本
+├── scripts/              # 逆向分析脚本
+├── packaging/            # 打包：PyInstaller spec、图标生成、DMG 构建脚本
 └── _reverse/             # 官方安装包解包工作区（本地专用，不入库）
 ```
 
@@ -71,7 +100,7 @@ uv run pytest           # 离线测试（真机测试加 --runlive）
 | M0 | 解包官方软件、建立知识库、项目文档 | 完成 |
 | M1 | 从 Web bundle 逆向 A7 协议，协议库 + CLI 跑通真机读写 | 完成 |
 | M2 | macOS 菜单栏应用（PySide6 accessory 模式，无 Dock 图标） | 完成 |
-| M3 | 打包分发（.app）、打磨 | 未开始 |
+| M3 | 打包分发（.app + DMG）、打磨 | .app/DMG 已通（ad-hoc 签名）；正式签名与公证待 Developer ID |
 
 ## 法律与免责声明
 

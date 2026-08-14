@@ -49,7 +49,26 @@
 | 代码质量 | `ruff` | — | format + lint 一把抓 |
 | 环境管理 | `uv` | `pip + venv` | 快，锁文件可靠 |
 | GUI（二期） | `PySide6`（accessory 菜单栏模式） | rumps | 见 §4；不用 pywebview/WebView |
-| 打包（三期） | `py2app` 或 `PyInstaller` | — | 产出独立 .app |
+| 打包（三期） | `PyInstaller`（+ `hdiutil` 出 DMG） | py2app | ✅ 采用，见 §2.4 |
+
+### 2.4 打包选型（M3，2026-08-14 定）
+
+选 **PyInstaller**（onedir + `BUNDLE`），未选 py2app：
+
+- `hidapi` 是自包含扩展（`hid.cpython-313-darwin.so` 只链 IOKit/CoreFoundation/AppKit），
+  两者都能收；PyInstaller 对 PySide6 的 hook 更成熟，Qt 插件与框架依赖解析开箱可用。
+- `Info.plist` 里 `LSUIElement=1` 由 spec 的 `info_plist` 指定，与运行期
+  `gui._set_accessory_policy()` 互为兜底（无 Dock 图标，FR-5）。
+- 装好的 PySide6 有 1.2G，必须裁剪：Python 层 `excludes` 去掉用不到的 `PySide6.*`，
+  再按产物路径剔除 Qt 插件链（虚拟键盘 → QtQuick/QtQml、PDF 图片插件 → QtPdf）。
+  裁剪后 .app 77M、DMG 32M。踩坑见 `kb/0009`。
+- DMG 用系统自带 `hdiutil create -format UDZO`（不引入 `create-dmg` 等额外依赖）；
+  macOS 27 会提示该命令已废弃、建议改 `diskutil image create`，但我们要兼容
+  macOS 14+，继续用 `hdiutil`。
+- 签名：默认 ad-hoc（`codesign -s -`），仅保证本机可运行；正式签名/公证需
+  Developer ID，脚本留 `MCMOUSE_SIGN_IDENTITY` 环境变量入口。
+
+构建入口：`packaging/build_dmg.sh`（图标生成 → PyInstaller → 签名 → DMG）。
 
 ## 3. 逆向工程工具链
 
@@ -73,7 +92,7 @@
 ┌─────────────────┐          ┌─────────────────┐       ┌──────────────┐
 │ CLI (typer)     │          │ 菜单栏应用 GUI    │       │ 独立 .app    │
 ├─────────────────┤          ├─────────────────┤       ├──────────────┤
-│ 协议库 mcmouse.protocol │ ─→ │ 同一协议库，不改动  │ ─→    │ py2app 打包   │
+│ 协议库 mcmouse.protocol │ ─→ │ 同一协议库，不改动  │ ─→    │ PyInstaller 打包 │
 ├─────────────────┤          ├─────────────────┤       ├──────────────┤
 │ hidapi 传输层    │          │ hidapi 传输层    │       │ 同左          │
 └─────────────────┘          └─────────────────┘       └──────────────┘

@@ -12,6 +12,7 @@
 | 0006 | [旧协议按键映射、宏、灯效与电量](protocol/0006-old-protocol-buttons-macros-light-battery.md) | protocol | analyzed | 2026-08-08 |
 | 0007 | [踩坑：旧协议读路径的三个真机坑](pitfalls/0007-old-protocol-read-pitfalls.md) | pitfalls | verified | 2026-08-08 |
 | 0008 | [踩坑：macOS 27 上 Qt 托盘菜单必崩与绕行](pitfalls/0008-qt-tray-crash-macos27.md) | pitfalls | verified | 2026-08-09 |
+| 0009 | [踩坑：打包 .app / DMG 的三个坑](pitfalls/0009-macos-app-packaging-pitfalls.md) | pitfalls | verified | 2026-08-14 |
 
 ## 分类目录
 

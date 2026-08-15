@@ -1,6 +1,6 @@
 """生成 App 图标 AppIcon.icns（自绘，不使用任何官方素材）。
 
-图形与菜单栏图标同源（mcmouse.ui.make_tray_icon 的鼠标剪影），
+图形与菜单栏图标同源（空心鼠标轮廓），
 这里画成 macOS 圆角矩形应用图标：渐变底 + 白色鼠标 + 滚轮。
 
 用法：uv run python packaging/make_icon.py build/AppIcon.icns

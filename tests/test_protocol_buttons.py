@@ -24,6 +24,8 @@ def test_describe_keyboard() -> None:
     assert buttons.describe_button(_binding(2, 0, 0x010400)) == "Ctrl+A"
     assert buttons.describe_button(_binding(2, 0, 0x022800)) == "Shift+Enter"
     assert buttons.describe_button(_binding(2, 0, 0x052800)) == "Ctrl+Alt+Enter"
+    assert buttons.describe_button(_binding(2, 0, 0x00E100)) == "Shift"
+    assert buttons.describe_button(_binding(2, 0, 0x00E300)) == "Cmd"
 
 
 def test_describe_others() -> None:

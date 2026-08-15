@@ -10,10 +10,11 @@ from __future__ import annotations
 import ctypes
 import queue
 import sys
+import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QCursor, QFont, QGuiApplication, QPainter
 from PySide6.QtWidgets import (
     QApplication,
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .devices import DeviceVariant
+from .devices import MODEL_CAPS, DeviceVariant
 from .panel import Panel
 from .profiles import save_profile
 from .protocol.old import RATE_TABLES, MouseConfig
@@ -36,6 +37,7 @@ from .ui import (
     POPOVER_WIDTH,
     POPUP_SHADOW,
     BatteryView,
+    DpiSlider,
     Hairline,
     apply_macos_app,
     caption,
@@ -46,6 +48,7 @@ from .ui import (
     pill_button,
     popup_stylesheet,
     style_label,
+    tray_icon_tooltip,
 )
 
 if TYPE_CHECKING:
@@ -140,6 +143,17 @@ class DeviceWorker(QThread):
             session.write_dpi(
                 replace(cfg, usb_dpi_index=task[1], g_dpi_index=task[1]), wired
             )
+        elif kind == "dpi_value":  # 改当前档的 DPI 值（弹层滑块，kb/0005 §3.1）
+            cfg = session.read_config()
+            index = cfg.usb_dpi_index if wired else cfg.g_dpi_index
+            index = max(0, min(index, cfg.dpi_count - 1))
+            dpis = list(cfg.dpis)
+            vals = list(cfg.dpi_vals)
+            dpis[index] = task[1]
+            vals[index] = task[1]
+            session.write_dpi(
+                replace(cfg, dpis=tuple(dpis), dpi_vals=tuple(vals)), wired
+            )
         elif kind == "dpi_table":  # (dpis, count, index)
             dpis, count, index = task[1], task[2], task[3]
             cfg = session.read_config()
@@ -180,10 +194,10 @@ class DeviceWorker(QThread):
         return self._snapshot(session)
 
 
-def _set_accessory_policy() -> None:
-    """把进程切成 accessory（无 Dock 图标）。仅 macOS；打包后由 Info.plist 兜底。"""
+def _nsapplication() -> tuple[ctypes.CDLL, int] | None:
+    """NSApplication.sharedApplication；非 macOS 或调用失败返回 None。"""
     if sys.platform != "darwin":
-        return
+        return None
     try:
         objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
         objc.objc_getClass.restype = ctypes.c_void_p
@@ -192,25 +206,60 @@ def _set_accessory_policy() -> None:
         objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         cls = objc.objc_getClass(b"NSApplication")
         nsapp = objc.objc_msgSend(cls, objc.sel_registerName(b"sharedApplication"))
+        return objc, nsapp
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _set_accessory_policy() -> None:
+    """把进程切成 accessory（无 Dock 图标）。仅 macOS；打包后由 Info.plist 兜底。"""
+    got = _nsapplication()
+    if got is None:
+        return
+    objc, nsapp = got
+    try:
         objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
         objc.objc_msgSend(nsapp, objc.sel_registerName(b"setActivationPolicy:"), 1)
     except Exception:  # noqa: BLE001 - 失败则保持普通模式，不影响功能
         pass
 
 
+def _activate_cocoa_app() -> None:
+    """accessory 默认不抢焦点。弹层前必须激活，否则首次点击会立刻关掉。"""
+    got = _nsapplication()
+    if got is None:
+        return
+    objc, nsapp = got
+    try:
+        objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+        objc.objc_msgSend(
+            nsapp, objc.sel_registerName(b"activateIgnoringOtherApps:"), 1
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class TrayPopup(QWidget):
-    """托盘弹层（替代 NSMenu，kb/0008）：状态 + DPI/回报率快捷切换。"""
+    """托盘弹层（替代 NSMenu，kb/0008）：状态 + DPI/回报率快捷切换。
+
+    不用 Qt.Popup：状态栏点击发生在弹层外，按下时弹出、松开即被当成
+    「点到外面」关掉（桌面有焦点时必现闪一下）。改用 Tool 窗口。
+    """
+
+    dismissed = Signal()
 
     def __init__(
         self, submit: Callable[..., None], on_panel: Callable[[], None]
     ) -> None:
         super().__init__(
             None,
-            Qt.WindowType.Popup
+            Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.NoDropShadowWindowHint,
+            | Qt.WindowType.NoDropShadowWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint,
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setFixedWidth(POPOVER_WIDTH + POPUP_SHADOW * 2)
         self._submit = submit
         self._apply_style()
@@ -240,13 +289,9 @@ class TrayPopup(QWidget):
         head.addWidget(self._info)
         layout.addLayout(head)
 
-        self._dpi_label = caption("DPI")
-        layout.addWidget(self._dpi_label)
-        self._dpi_grid = QGridLayout()
-        self._dpi_grid.setSpacing(4)
-        self._dpi_group = QButtonGroup(self)
-        self._dpi_group.setExclusive(True)
-        layout.addLayout(self._dpi_grid)
+        self._dpi_slider = DpiSlider()
+        self._dpi_slider.value_committed.connect(lambda v: self._submit("dpi_value", v))
+        layout.addWidget(self._dpi_slider)
 
         self._rate_label = caption("回报率")
         layout.addWidget(self._rate_label)
@@ -266,6 +311,16 @@ class TrayPopup(QWidget):
             btn = menu_row(text)
             btn.clicked.connect(fn)
             layout.addWidget(btn)
+
+    def hideEvent(self, event) -> None:  # noqa: ANN001
+        super().hideEvent(event)
+        self.dismissed.emit()
+
+    def keyPressEvent(self, event) -> None:  # noqa: ANN001
+        if event.key() == Qt.Key.Key_Escape:
+            self.hide()
+            return
+        super().keyPressEvent(event)
 
     def _apply_style(self) -> None:
         self.setStyleSheet(popup_stylesheet())
@@ -298,16 +353,15 @@ class TrayPopup(QWidget):
             btn.clicked.connect(lambda _=False, i=i: on_pick(i))
             grid.addWidget(btn, i // cols, i % cols)
 
-    def _clear_pills(self) -> None:
-        self._fill_grid(self._dpi_grid, self._dpi_group, [], -1, lambda i: None, 3)
+    def _clear_rate_pills(self) -> None:
         self._fill_grid(self._rate_grid, self._rate_group, [], -1, lambda i: None, 4)
 
     def show_error(self, message: str) -> None:
         self._title.setText("未连接")
         self._info.setText(message)
         self._battery.hide()
-        self._clear_pills()
-        self._dpi_label.hide()
+        self._dpi_slider.hide()
+        self._clear_rate_pills()
         self._rate_label.hide()
         self.adjustSize()
 
@@ -317,9 +371,9 @@ class TrayPopup(QWidget):
             self._title.setText("正在读取设备…")
             self._info.setText("请用有线或 2.4G 接收器连接鼠标")
             self._battery.hide()
-            self._dpi_label.hide()
+            self._dpi_slider.hide()
             self._rate_label.hide()
-            self._clear_pills()
+            self._clear_rate_pills()
             self.adjustSize()
             return
         role = ROLE_NAMES.get(snap.variant.role, snap.variant.role)
@@ -331,23 +385,18 @@ class TrayPopup(QWidget):
         wired = snap.variant.role == "wired"
         if cfg is None:
             self._info.setText(f"{role} · 鼠标休眠，晃动后刷新")
-            self._dpi_label.hide()
+            self._dpi_slider.hide()
             self._rate_label.hide()
-            self._clear_pills()
+            self._clear_rate_pills()
             self.adjustSize()
             return
-        self._dpi_label.show()
+        self._dpi_slider.show()
         self._rate_label.show()
+        caps = MODEL_CAPS.get(snap.variant.model)
+        self._dpi_slider.set_limits(caps.dpi_max if caps else 26000)
         dpi_cur = cfg.usb_dpi_index if wired else cfg.g_dpi_index
-        dpi_items = [f"{cfg.dpis[i]}" for i in range(cfg.dpi_count)]
-        self._fill_grid(
-            self._dpi_grid,
-            self._dpi_group,
-            dpi_items,
-            dpi_cur,
-            lambda i: self._submit("dpi_stage", i),
-            3 if len(dpi_items) > 3 else max(len(dpi_items), 1),
-        )
+        dpi_cur = max(0, min(dpi_cur, cfg.dpi_count - 1))
+        self._dpi_slider.set_dpi(cfg.dpis[dpi_cur])
         rates = RATE_TABLES[snap.variant.rate_table]
         rate_cur = cfg.usb_rate_index if wired else cfg.g_rate_index
         self._fill_grid(
@@ -377,12 +426,26 @@ class TrayApp(QObject):
 
         self._popup = TrayPopup(self._worker.submit, self.show_panel)
         self._popup.update_snapshot(None)
+        self._popup.dismissed.connect(self._on_popup_dismissed)
 
-        self._tray = QSystemTrayIcon(make_tray_icon(), app)
-        self._tray.setToolTip("A7")
+        self._tray = QSystemTrayIcon(app)
+        self._apply_tray_icon(None)
         # 不设原生菜单（kb/0008：macOS 27 点击即崩），点击改弹 Qt 弹层
         self._tray.activated.connect(self._on_activated)
         self._tray.show()
+        self._poll = QTimer(self)
+        self._poll.setInterval(60_000)
+        self._poll.timeout.connect(self.refresh)
+        self._poll.start()
+        self._app.applicationStateChanged.connect(self._on_app_state)
+        self._opening = False
+        self._hold_until = 0.0
+        self._last_activation = 0.0
+        self._dismissed_at = 0.0
+        self._open_started = 0.0
+        self._open_timer = QTimer(self)
+        self._open_timer.setSingleShot(True)
+        self._open_timer.timeout.connect(self._finish_open)
         self.refresh()
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
@@ -391,9 +454,38 @@ class TrayApp(QObject):
             QSystemTrayIcon.ActivationReason.Context,
         ):
             return
-        if self._popup.isVisible():
+        now = time.monotonic()
+        # macOS 一次点击有时会连发 Trigger + Context
+        if now - self._last_activation < 0.08:
+            return
+        self._last_activation = now
+        # 点图标关弹层时，Qt 会先 hide 再发 activated，不能当成再打开
+        if now - self._dismissed_at < 0.25:
+            return
+        if self._popup.isVisible() or self._opening:
+            self._cancel_open()
             self._popup.hide()
             return
+        self._opening = True
+        self._open_started = time.monotonic()
+        _activate_cocoa_app()
+        self._open_timer.start(16)
+
+    def _cancel_open(self) -> None:
+        self._open_timer.stop()
+        self._opening = False
+
+    def _finish_open(self) -> None:
+        if not self._opening:
+            return
+        if (
+            QGuiApplication.mouseButtons() != Qt.MouseButton.NoButton
+            and time.monotonic() - self._open_started < 0.4
+        ):
+            self._open_timer.start(16)
+            return
+        self._opening = False
+        self._hold_until = time.monotonic() + 0.4
         self.refresh()
         self._popup.adjustSize()
         rect = self._tray.geometry()
@@ -407,17 +499,35 @@ class TrayApp(QObject):
         self._popup.move(max(x, 8), y)
         self._popup.show()
         self._popup.raise_()
+        self._popup.activateWindow()
+
+    def _on_popup_dismissed(self) -> None:
+        self._dismissed_at = time.monotonic()
+        self._cancel_open()
+
+    def _on_app_state(self, state: Qt.ApplicationState) -> None:
+        """点桌面/别的 App 时收起弹层。刚打开时忽略激活抖动。"""
+        if self._opening or time.monotonic() < self._hold_until:
+            return
+        if state != Qt.ApplicationState.ApplicationActive:
+            self._popup.hide()
+
+    def _apply_tray_icon(self, battery: int | None, charging: bool = False) -> None:
+        self._tray.setIcon(make_tray_icon(battery, charging=charging))
+        self._tray.setToolTip(tray_icon_tooltip(battery, charging=charging))
 
     def refresh(self) -> None:
         self._worker.submit("refresh")
 
     def _on_snapshot(self, snap: DeviceSnapshot) -> None:
         self._snapshot = snap
+        self._apply_tray_icon(snap.battery, bool(snap.charge_status))
         self._popup.update_snapshot(snap)
         if self._panel is not None:
             self._panel.on_snapshot(snap)
 
     def _on_failed(self, message: str) -> None:
+        self._apply_tray_icon(None)
         self._popup.show_error(message)
         if self._panel is not None:
             self._panel.show_error(message)
@@ -433,6 +543,7 @@ class TrayApp(QObject):
         self._panel.activateWindow()
 
     def quit(self) -> None:
+        self._poll.stop()
         self._worker.stop()
         self._worker.wait(3000)
         self._app.quit()

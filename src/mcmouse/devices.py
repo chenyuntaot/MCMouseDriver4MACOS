@@ -47,6 +47,15 @@ KNOWN_VARIANTS: tuple[DeviceVariant, ...] = (
 # 迈从相关 VID（十进制），用于枚举时宽匹配，见 kb/0002
 MCHOSE_VIDS: frozenset[int] = frozenset({14391, 21075})
 
+# 官方 UI 常见下限 100/200。协议接受任意 u16（kb/0002 真机自定义 1193）。
+DPI_MIN = 100
+DPI_STEP = 50  # 键盘/滚轮步进；拖动按 1 DPI 连续取值
+
+
+def clamp_dpi(value: int, dpi_max: int) -> int:
+    """把 DPI 限制在 [DPI_MIN, dpi_max]。"""
+    return max(DPI_MIN, min(dpi_max, int(value)))
+
 
 @dataclass(frozen=True)
 class ModelCaps:

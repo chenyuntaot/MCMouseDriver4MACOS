@@ -9,7 +9,7 @@
 | 0003 | [旧协议报文框架（Feature Report + XOR 0xFF）](protocol/0003-old-protocol-framing.md) | protocol | analyzed | 2026-08-08 |
 | 0004 | [新协议报文框架（Output Report 0x4D）](protocol/0004-new-protocol-framing.md) | protocol | analyzed | 2026-08-08 |
 | 0005 | [旧协议功能命令布局（配置/DPI/回报率/传感器/电量）](protocol/0005-old-protocol-commands.md) | protocol | analyzed | 2026-08-08 |
-| 0006 | [旧协议按键映射、宏、灯效与电量](protocol/0006-old-protocol-buttons-macros-light-battery.md) | protocol | analyzed | 2026-08-08 |
+| 0006 | [旧协议按键映射、宏、灯效与电量](protocol/0006-old-protocol-buttons-macros-light-battery.md) | protocol | analyzed | 2026-08-15 |
 | 0007 | [踩坑：旧协议读路径的三个真机坑](pitfalls/0007-old-protocol-read-pitfalls.md) | pitfalls | verified | 2026-08-08 |
 | 0008 | [踩坑：macOS 27 上 Qt 托盘菜单必崩与绕行](pitfalls/0008-qt-tray-crash-macos27.md) | pitfalls | verified | 2026-08-09 |
 | 0009 | [踩坑：打包 .app / DMG 的三个坑](pitfalls/0009-macos-app-packaging-pitfalls.md) | pitfalls | verified | 2026-08-14 |

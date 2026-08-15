@@ -13,6 +13,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLineEdit,
@@ -26,8 +27,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import profiles
+from . import custom_keys, profiles
 from .devices import MODEL_CAPS
+from .keycapture import KeyCaptureDialog
 from .protocol.buttons import (
     BUTTON_NAMES,
     BUTTON_PRESETS,
@@ -37,6 +39,7 @@ from .protocol.buttons import (
 from .protocol.macros import TRIGGER_MODES, parse_events_dsl
 from .protocol.old import (
     RATE_TABLES,
+    ButtonBinding,
     MouseConfig,
     sensor_game_mode,
     sensor_line,
@@ -53,6 +56,7 @@ from .ui import (
     footer_row,
     labeled_row,
     page_column,
+    safe_combo,
     section_title,
     wrap_scroll,
 )
@@ -78,6 +82,10 @@ PRESET_LABELS: dict[str, str] = {
     "volume-down": "音量 −",
     "mute": "静音",
     "play-pause": "播放/暂停",
+    "ctrl": "Ctrl",
+    "shift": "Shift",
+    "option": "Option",
+    "cmd": "Cmd",
     "disable": "禁用",
 }
 
@@ -138,13 +146,13 @@ class Panel(QMainWindow):
     def _build_basic_tab(self) -> QWidget:
         self._dpi_spins: list[QSpinBox] = []
         dpi_rows: list[QWidget] = []
-        self._dpi_count = QComboBox()
+        self._dpi_count = safe_combo()
         self._dpi_count.addItems([str(i) for i in range(1, 7)])
         self._dpi_count.setMinimumWidth(88)
         self._dpi_count.currentIndexChanged.connect(self._sync_dpi_enabled)
         dpi_rows.append(labeled_row("有效档数", self._dpi_count))
 
-        self._dpi_stage = QComboBox()
+        self._dpi_stage = safe_combo()
         self._dpi_stage.setMinimumWidth(88)
         self._dpi_stage.activated.connect(
             lambda: self._submit("dpi_stage", self._dpi_stage.currentIndex())
@@ -164,16 +172,16 @@ class Panel(QMainWindow):
         apply_dpi.clicked.connect(self._apply_dpi)
         dpi_rows.append(footer_row(apply_dpi))
 
-        self._rate = QComboBox()
+        self._rate = safe_combo()
         self._rate.setMinimumWidth(108)
         self._rate.activated.connect(
             lambda: self._submit("rate", self._rate.currentIndex())
         )
 
-        self._lod = QComboBox()
+        self._lod = safe_combo()
         self._lod.setMinimumWidth(108)
         self._lod.activated.connect(lambda: self._apply_sensor())
-        self._game = QComboBox()
+        self._game = safe_combo()
         self._game.addItems(["模式 0", "模式 1", "模式 2"])
         self._game.setMinimumWidth(108)
         self._game.activated.connect(lambda: self._apply_sensor())
@@ -256,36 +264,127 @@ class Panel(QMainWindow):
         self._button_combos: list[QComboBox] = []
         rows: list[QWidget] = []
         for i in range(6):
-            combo = QComboBox()
+            combo = safe_combo()
             combo.setMinimumWidth(160)
-            for key, label in PRESET_LABELS.items():
-                if key in BUTTON_PRESETS:
-                    combo.addItem(label, key)
-            combo.activated.connect(lambda _=0, i=i: self._apply_button(i))
+            combo.currentIndexChanged.connect(lambda _=0, i=i: self._on_button_combo(i))
             rows.append(
                 labeled_row(BUTTON_NAMES.get(i, f"键{i}"), combo, stretch_control=True)
             )
             self._button_combos.append(combo)
+        add_row = QWidget()
+        add_layout = QHBoxLayout(add_row)
+        add_layout.setContentsMargins(0, 0, 0, 0)
+        add_btn = QPushButton("添加键盘按键")
+        add_btn.clicked.connect(self._add_keyboard_key)
+        add_layout.addWidget(add_btn)
+        add_layout.addStretch()
+        self._reload_button_combos()
         return page_column(
             section_title("按键映射"),
             Card(*rows),
-            caption("选择后立即写入鼠标。未列出的自定义键码请用 CLI。"),
+            add_row,
+            caption("选择后立即写入鼠标。列表没有的键可点「添加键盘按键」录制。"),
         )
 
-    def _apply_button(self, index: int) -> None:
-        key = self._button_combos[index].currentData()
-        if key is None:
+    def _combo_data(self, button_type: int, value: int) -> str:
+        return f"{button_type}:{value}"
+
+    def _parse_combo_data(self, data: object) -> tuple[int, int] | None:
+        if not isinstance(data, str) or ":" not in data:
+            return None
+        left, right = data.split(":", 1)
+        try:
+            return int(left), int(right)
+        except ValueError:
+            return None
+
+    def _reload_button_combos(
+        self, selected: list[tuple[int, int] | None] | None = None
+    ) -> None:
+        """用内置预设 + 已保存的自定义键重建六个下拉框。"""
+        if selected is None:
+            selected = [
+                self._parse_combo_data(c.currentData()) for c in self._button_combos
+            ]
+        extras = custom_keys.load_custom_keys()
+        for combo, current in zip(self._button_combos, selected, strict=True):
+            combo.blockSignals(True)
+            combo.clear()
+            for key, label in PRESET_LABELS.items():
+                if key in BUTTON_PRESETS:
+                    t, v = BUTTON_PRESETS[key]
+                    combo.addItem(label, self._combo_data(t, v))
+            if extras:
+                combo.insertSeparator(combo.count())
+                for item in extras:
+                    combo.addItem(
+                        item.label,
+                        self._combo_data(item.button_type, item.value),
+                    )
+            if current is not None:
+                data = self._combo_data(*current)
+                idx = combo.findData(data)
+                if idx < 0:
+                    combo.addItem(
+                        describe_button(
+                            ButtonBinding(
+                                button_type=current[0],
+                                button_index=0,
+                                value=current[1],
+                            )
+                        ),
+                        data,
+                    )
+                    idx = combo.findData(data)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+
+    def _on_button_combo(self, index: int) -> None:
+        if self._updating:
             return
-        button_type, value = BUTTON_PRESETS[key]
+        self._apply_button(index)
+
+    def _apply_button(self, index: int) -> None:
+        parsed = self._parse_combo_data(self._button_combos[index].currentData())
+        if parsed is None:
+            return
+        button_type, value = parsed
         self._submit("button", index, button_type, value)
+
+    def _add_keyboard_key(self) -> None:
+        dlg = KeyCaptureDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted or dlg.captured is None:
+            return
+        button_type, value, label = dlg.captured
+        box = QMessageBox(self)
+        box.setWindowTitle("确认按键")
+        box.setText(f"检测到「{label}」。")
+        box.setInformativeText("是否加入下拉列表？")
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.Save)
+        save_btn = box.button(QMessageBox.StandardButton.Save)
+        if save_btn is not None:
+            save_btn.setText("保存")
+        if box.exec() != QMessageBox.StandardButton.Save:
+            return
+        added = custom_keys.add_custom_key(label, button_type, value)
+        if added is None:
+            QMessageBox.information(
+                self, "已在列表中", f"「{label}」已经在下拉列表里。"
+            )
+            return
+        self._reload_button_combos()
 
     # ================= 宏 tab =================
 
     def _build_macro_tab(self) -> QWidget:
-        self._macro_key = QComboBox()
+        self._macro_key = safe_combo()
         self._macro_key.addItems([BUTTON_NAMES.get(i, f"键{i}") for i in range(6)])
         self._macro_key.setMinimumWidth(160)
-        self._macro_mode = QComboBox()
+        self._macro_mode = safe_combo()
         self._macro_mode.setMinimumWidth(160)
         for key, label in TRIGGER_LABELS.items():
             if key in TRIGGER_MODES:
@@ -476,15 +575,9 @@ class Panel(QMainWindow):
             self._game.setCurrentIndex(sensor_game_mode(cfg.sensor))
             self._sleep.setValue(cfg.sleep_minutes)
             self._debounce.setValue(cfg.key_debounce)
-            preset_rev = {v: k for k, v in BUTTON_PRESETS.items()}
+            self._reload_button_combos([(b.button_type, b.value) for b in cfg.buttons])
             for i, b in enumerate(cfg.buttons):
-                combo = self._button_combos[i]
-                name = preset_rev.get((b.button_type, b.value))
-                if name is not None:
-                    idx = combo.findData(name)
-                    if idx >= 0:
-                        combo.setCurrentIndex(idx)
-                combo.setToolTip(describe_button(b))
+                self._button_combos[i].setToolTip(describe_button(b))
         finally:
             self._updating = False
 

@@ -10,7 +10,7 @@ from dataclasses import replace
 
 import typer
 
-from .devices import MODEL_CAPS, DeviceVariant
+from .devices import DPI_MIN, MODEL_CAPS, DeviceVariant
 from .protocol.buttons import (
     BUTTON_NAMES,
     BUTTON_PRESETS,
@@ -119,8 +119,6 @@ def info() -> None:
 
 dpi_app = typer.Typer(help="DPI 设置（写入后读回校验）", no_args_is_help=True)
 app.add_typer(dpi_app, name="dpi")
-
-DPI_MIN = 100  # 下限保守拦截，官方 UI 常见最低档为 100/200
 
 
 def _read_awake_config(session: OldProtocolSession) -> MouseConfig:

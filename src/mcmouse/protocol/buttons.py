@@ -109,6 +109,35 @@ HID_USAGE_NAMES: dict[int, str] = {
     0x50: "←",
     0x51: "↓",
     0x52: "↑",
+    0x2D: "-",
+    0x2E: "=",
+    0x2F: "[",
+    0x30: "]",
+    0x31: "\\",
+    0x33: ";",
+    0x34: "'",
+    0x35: "`",
+    0x36: ",",
+    0x37: ".",
+    0x38: "/",
+    0x54: "Num/",
+    0x55: "Num*",
+    0x56: "Num-",
+    0x57: "Num+",
+    0x58: "NumEnter",
+    **{0x59 + i: f"Num{i + 1}" for i in range(9)},  # 0x59-0x61: Num1-Num9
+    0x62: "Num0",
+    0x63: "Num.",
+    # 单独修饰键走 HID usage 0xE0-0xE7，而不是只填修饰掩码、usage=0
+    # （kb/0006 §1.2；固件把 usage 0 当「无键」）
+    0xE0: "Ctrl",
+    0xE1: "Shift",
+    0xE2: "Option",
+    0xE3: "Cmd",
+    0xE4: "RCtrl",
+    0xE5: "RShift",
+    0xE6: "ROption",
+    0xE7: "RCmd",
 }
 
 # 宏 DSL 键名 → HID usage（含方向键别名），供 parse_events_dsl 使用
@@ -129,6 +158,8 @@ def describe_button(binding: ButtonBinding) -> str:
     if t == 2:
         mods = "+".join(name for bit, name in MOD_BITS if v >> 16 & bit)
         usage = (v >> 8) & 0xFF
+        if usage == 0:
+            return mods if mods else "未命名"
         key = HID_USAGE_NAMES.get(usage, f"Usage 0x{usage:02x}")
         return f"{mods}+{key}" if mods else key
     if t == 3:
@@ -179,4 +210,8 @@ BUTTON_PRESETS: dict[str, tuple[int, int]] = {
     "volume-down": (3, 0xEA0000),
     "mute": (3, 0xE20000),
     "play-pause": (3, 0xCD0000),
+    "ctrl": (2, 0x00E000),  # HID Left Control 0xE0，kb/0006 §1.2
+    "shift": (2, 0x00E100),  # Left Shift 0xE1
+    "option": (2, 0x00E200),  # Left Alt 0xE2
+    "cmd": (2, 0x00E300),  # Left GUI 0xE3
 }

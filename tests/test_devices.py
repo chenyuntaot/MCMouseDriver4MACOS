@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mcmouse.devices import KNOWN_VARIANTS, MCHOSE_VIDS
+from mcmouse.devices import DPI_MIN, KNOWN_VARIANTS, MCHOSE_VIDS, clamp_dpi
 
 
 def test_all_variants_use_known_vids() -> None:
@@ -23,3 +23,9 @@ def test_no_duplicate_vid_pid() -> None:
         KNOWN_VARIANTS
     )
     assert all(0 < pid < 65536 for _, pid in pairs)
+
+
+def test_clamp_dpi() -> None:
+    assert clamp_dpi(50, 26000) == DPI_MIN
+    assert clamp_dpi(1193, 26000) == 1193
+    assert clamp_dpi(30000, 26000) == 26000

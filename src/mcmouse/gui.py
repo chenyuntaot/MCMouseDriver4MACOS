@@ -154,15 +154,16 @@ class DeviceWorker(QThread):
             session.write_dpi(
                 replace(cfg, dpis=tuple(dpis), dpi_vals=tuple(vals)), wired
             )
-        elif kind == "dpi_table":  # (dpis, count, index)
+        elif kind == "dpi_table":  # (dpis, count, index[, dpi_vals])
             dpis, count, index = task[1], task[2], task[3]
+            dpi_vals = task[4] if len(task) > 4 and task[4] is not None else dpis
             cfg = session.read_config()
             session.write_dpi(
                 replace(
                     cfg,
                     dpis=dpis,
                     dpi_count=count,
-                    dpi_vals=dpis,
+                    dpi_vals=dpi_vals,
                     usb_dpi_index=index,
                     g_dpi_index=index,
                 ),
@@ -181,6 +182,10 @@ class DeviceWorker(QThread):
         elif kind == "macro":  # (index, events_logical, condition, name)
             session.write_button(task[1], 4, 0)  # 先绑（0x52 清槽，kb/0007 §7）
             session.write_macro(task[1], task[2], task[3], task[4])
+        elif kind == "switch_profile":  # 板载配置索引，见 kb/0005
+            session.switch_profile(task[1])
+        elif kind == "factory_reset":  # 恢复出厂，见 kb/0005
+            session.factory_reset()
         elif kind == "apply_config":  # 导入的整份配置（0x57 全量写）
             from .protocol.old import build_write_config
 
@@ -188,7 +193,6 @@ class DeviceWorker(QThread):
             session.send_write(report_id, payload)
         elif kind == "save_profile":
             save_profile(task[1], session.read_config())
-            return None
         else:
             raise ValueError(f"未知任务: {kind}")
         return self._snapshot(session)

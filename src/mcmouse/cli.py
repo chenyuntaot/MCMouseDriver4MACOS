@@ -20,7 +20,9 @@ from .protocol.buttons import (
 from .protocol.macros import TRIGGER_MODES, parse_events_dsl
 from .protocol.old import (
     RATE_TABLES,
+    ROTATE_MAX_DEGREES,
     MouseConfig,
+    quantize_rotate,
     sensor_game_mode,
     sensor_line,
     sensor_lod,
@@ -278,6 +280,24 @@ def sensor_motion_sync_set(state: str) -> None:
         typer.echo("写入未生效，请重试。")
         raise typer.Exit(code=1)
     typer.echo(f"Motion Sync → {'开' if target else '关'}")
+
+
+@sensor_app.command("rotate")
+def sensor_rotate_set(degrees: int) -> None:
+    """角度旋转（度）。步进 1°，量程 ±30°，超出会收口到端点。"""
+    if abs(degrees) > ROTATE_MAX_DEGREES:
+        typer.echo(f"角度范围：-{ROTATE_MAX_DEGREES} ~ {ROTATE_MAX_DEGREES}")
+        raise typer.Exit(code=2)
+    iface, _ = _require_old_device()
+    expected = quantize_rotate(degrees)
+    _, after = _sensor_roundtrip(iface, rotate_degrees=degrees)
+    if after.rotate_degrees != expected:
+        typer.echo(
+            f"写入未生效（设备回读 {after.rotate_degrees}°，期望 {expected}°）。"
+            "该功能可能需要较新固件。"
+        )
+        raise typer.Exit(code=1)
+    typer.echo(f"角度旋转 → {expected}°")
 
 
 @sensor_app.command("game-mode")

@@ -122,6 +122,15 @@ def parse_device_info(payload: bytes) -> DeviceInfo:
 
 # --- 读整份配置 0x12 0x67（kb/0005 §2） ---
 
+# 角度旋转：rotateVal 就是度数本身（一步 1°），读回时 >30 视为负值，
+# 故量程为 ±30°（kb/0005 §2 byte49、§3.3）。
+# 真机验证 2026-08-15：本程序写 12° 时曾按「一步 4°」发出 rotateVal=3，
+# 官方软件读出来显示 3°，证明单位是 1° 而非 4°。UI 的步进与量程必须引用这里，
+# 否则界面显示的角度会和真正写进设备的值对不上。
+ROTATE_UNIT_DEGREES = 1
+ROTATE_MAX_STEPS = 30
+ROTATE_MAX_DEGREES = ROTATE_MAX_STEPS * ROTATE_UNIT_DEGREES
+
 
 @dataclass(frozen=True)
 class ButtonBinding:
@@ -157,9 +166,32 @@ class MouseConfig:
 
     @property
     def rotate_degrees(self) -> int:
-        """角度旋转（度）。原始值 >30 按负值处理（kb/0005 §2），单位 4°。"""
-        v = self.rotate_raw - 256 if self.rotate_raw > 30 else self.rotate_raw
-        return v * 4
+        """角度旋转（度）。原始值 >30 按负值处理（kb/0005 §2），单位 1°。"""
+        raw = self.rotate_raw
+        v = raw - 256 if raw > ROTATE_MAX_STEPS else raw
+        return v * ROTATE_UNIT_DEGREES
+
+
+def encode_rotate(degrees: int) -> tuple[int, int]:
+    """度数 → (rotate_open, rotate_val)。单位 1°，负值 +256（kb/0005 §3.3）。
+
+    量程限制在 ±30°，与读回「>30 视为负值」的阈值对齐。
+    """
+    steps = int(round(degrees / ROTATE_UNIT_DEGREES))
+    steps = max(-ROTATE_MAX_STEPS, min(ROTATE_MAX_STEPS, steps))
+    if steps == 0:
+        return 0, 0
+    raw = steps + 256 if steps < 0 else steps
+    return 1, raw & 0xFF
+
+
+def quantize_rotate(degrees: int) -> int:
+    """写入后实际生效的角度：受 1° 步进与 ±30° 量程限制（kb/0005 §3.3）。"""
+    rotate_open, raw = encode_rotate(degrees)
+    if not rotate_open:
+        return 0
+    steps = raw - 256 if raw > ROTATE_MAX_STEPS else raw
+    return steps * ROTATE_UNIT_DEGREES
 
 
 def build_read_config() -> tuple[int, bytes]:
@@ -332,6 +364,7 @@ def build_write_sensor_from_config(
     line: bool | None = None,
     motion_sync: bool | None = None,
     game_mode: int | None = None,
+    rotate_degrees: int | None = None,
 ) -> tuple[int, bytes]:
     """以当前配置为底、覆盖指定项的性能写命令（0x11 0x42，kb/0005 §3.3）。
 
@@ -345,8 +378,11 @@ def build_write_sensor_from_config(
     motion_v = sensor_motion_sync(sensor) if motion_sync is None else motion_sync
     # 读回 0/1/2（位掩码），写入 1/2/3（kb/0005 §3.3）
     game_v = sensor_game_mode(sensor) if game_mode is None else game_mode
-    rotate_open = 1 if cfg.rotate_raw else 0
-    rotate_val = cfg.rotate_raw if rotate_open else 0
+    if rotate_degrees is None:
+        rotate_open = 1 if cfg.rotate_raw else 0
+        rotate_val = cfg.rotate_raw if rotate_open else 0
+    else:
+        rotate_open, rotate_val = encode_rotate(rotate_degrees)
     return build_write_sensor(
         lod_v,
         SWITCH_ON if ripple_v else SWITCH_OFF,

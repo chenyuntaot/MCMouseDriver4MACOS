@@ -29,9 +29,11 @@ from .protocol.old import (
     REPORT_ID_LONG,
     DeviceInfo,
     MouseConfig,
+    build_factory_reset,
     build_read_config,
     build_read_device_info,
     build_read_firmware,
+    build_switch_profile,
     build_write_debounce,
     build_write_dpi,
     build_write_rate,
@@ -136,6 +138,7 @@ class OldProtocolSession:
         line: bool | None = None,
         motion_sync: bool | None = None,
         game_mode: int | None = None,
+        rotate_degrees: int | None = None,
     ) -> None:
         """以 cfg 为底覆盖指定项写性能参数（0x11 0x42，kb/0005 §3.3）。"""
         report_id, payload = build_write_sensor_from_config(
@@ -145,7 +148,18 @@ class OldProtocolSession:
             line=line,
             motion_sync=motion_sync,
             game_mode=game_mode,
+            rotate_degrees=rotate_degrees,
         )
+        self.send_write(report_id, payload)
+
+    def switch_profile(self, profile_index: int) -> None:
+        """切换板载配置（0x11 0x58，kb/0005 §3.4，analyzed）。"""
+        report_id, payload = build_switch_profile(profile_index)
+        self.send_write(report_id, payload)
+
+    def factory_reset(self) -> None:
+        """恢复出厂设置（0x11 0x0B，kb/0005 §3.4，analyzed）。"""
+        report_id, payload = build_factory_reset()
         self.send_write(report_id, payload)
 
     def write_sleep(self, minutes: int) -> None:

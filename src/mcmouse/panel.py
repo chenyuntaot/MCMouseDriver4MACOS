@@ -1,590 +1,129 @@
-"""设置面板（M2，FR-2/3/5/6）：系统设置风侧栏 + 分组卡片。
-
-只组装任务交给 gui.DeviceWorker 执行；状态通过 on_snapshot 回灌。
-控件尽量用 Cocoa 原生样式；用户改动即时下发（DPI 表除外，多字段需一次提交）。
-"""
+"""设置面板：官方 HUB 风格左栏 + 顶栏四标签。只组装任务交给 DeviceWorker。"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QDialog,
-    QFileDialog,
+    QFrame,
     QHBoxLayout,
-    QLineEdit,
-    QListWidget,
     QMainWindow,
-    QMessageBox,
-    QPushButton,
-    QSpinBox,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from . import custom_keys, profiles
-from .devices import MODEL_CAPS
-from .keycapture import KeyCaptureDialog
-from .protocol.buttons import (
-    BUTTON_NAMES,
-    BUTTON_PRESETS,
-    HID_USAGE_NAMES,
-    describe_button,
-)
-from .protocol.macros import TRIGGER_MODES, parse_events_dsl
-from .protocol.old import (
-    RATE_TABLES,
-    ButtonBinding,
-    MouseConfig,
-    sensor_game_mode,
-    sensor_line,
-    sensor_lod,
-    sensor_motion_sync,
-    sensor_ripple,
-)
-from .ui import (
-    Card,
-    Hairline,
-    HeaderBar,
-    NavList,
-    caption,
-    footer_row,
-    labeled_row,
-    page_column,
-    safe_combo,
-    section_title,
-    wrap_scroll,
-)
+from .hub.buttons_page import ButtonsPage
+from .hub.dpi_page import DpiPage
+from .hub.other_page import OtherPage
+from .hub.performance_page import PerformancePage
+from .hub.sidebar import Sidebar
+from .hub.theme import window_stylesheet
+from .hub.widgets import HubTabBar
 
 Submit = Callable[..., None]
 
-_KEY_TOKENS: dict[str, int] = {v.lower(): k for k, v in HID_USAGE_NAMES.items()}
-_KEY_TOKENS.update({"up": 0x52, "down": 0x51, "left": 0x50, "right": 0x4F})
-
-PRESET_LABELS: dict[str, str] = {
-    "default": "默认",
-    "left": "左键",
-    "right": "右键",
-    "middle": "中键",
-    "back": "后退",
-    "forward": "前进",
-    "wheel-up": "滚轮上",
-    "wheel-down": "滚轮下",
-    "dpi-switch": "DPI 切换",
-    "dpi-plus": "DPI +",
-    "dpi-minus": "DPI −",
-    "volume-up": "音量 +",
-    "volume-down": "音量 −",
-    "mute": "静音",
-    "play-pause": "播放/暂停",
-    "ctrl": "Ctrl",
-    "shift": "Shift",
-    "option": "Option",
-    "cmd": "Cmd",
-    "disable": "禁用",
-}
-
-TRIGGER_LABELS: dict[str, str] = {
-    "once": "执行一次",
-    "hold-loop": "按住时循环",
-    "until-same-key": "循环至相同键",
-    "until-any-key": "循环至任意键",
-}
-
-DSL_HINT = (
-    "逗号分隔：a 点按、+a/−a 按下/释放、delay:50 延迟、"
-    "mouse:left 鼠标键、wheel:up 滚轮。例：+ctrl,+c,-c,-ctrl"
+_TABS = (
+    ("mouse", "按键配置"),
+    ("dpi", "DPI 设置"),
+    ("perf", "性能设置"),
+    ("other", "其他设置"),
 )
 
-NAV_ITEMS = ("基本", "按键", "宏", "配置")
+
+def _scroll(page: QWidget) -> QScrollArea:
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.viewport().setAutoFillBackground(False)
+    scroll.setWidget(page)
+    return scroll
 
 
 class Panel(QMainWindow):
+    """HUB 风格设置窗口。关闭不退出菜单栏应用。"""
+
     def __init__(self, submit: Submit) -> None:
         super().__init__()
         self._submit = submit
         self._snapshot = None
         self._updating = False
-        self.setWindowTitle("A7 设置")
-        self.resize(740, 580)
-        self.setMinimumSize(640, 480)
+        self.setWindowTitle("MCMouseDriver")
+        self.resize(1080, 720)
+        self.setMinimumSize(960, 640)
 
-        self._header = HeaderBar()
+        self._sidebar = Sidebar(self._emit)
+        self._dpi = DpiPage(self._emit)
+        self._buttons = ButtonsPage(self._emit)
+        self._perf = PerformancePage(self._emit)
+        self._other = OtherPage(self._emit)
+        self._pages = (self._buttons, self._dpi, self._perf, self._other)
 
-        self._nav = NavList(list(NAV_ITEMS))
+        self._tabs = HubTabBar(list(_TABS))
+        self._tabs.setObjectName("HubTabs")
         self._stack = QStackedWidget()
-        self._stack.addWidget(wrap_scroll(self._build_basic_tab()))
-        self._stack.addWidget(wrap_scroll(self._build_buttons_tab()))
-        self._stack.addWidget(wrap_scroll(self._build_macro_tab()))
-        self._stack.addWidget(wrap_scroll(self._build_profiles_tab()))
-        self._nav.currentRowChanged.connect(self._stack.setCurrentIndex)
+        self._stack.addWidget(_scroll(self._buttons))
+        self._stack.addWidget(_scroll(self._dpi))
+        self._stack.addWidget(_scroll(self._perf))
+        self._stack.addWidget(_scroll(self._other))
+        self._tabs.currentChanged.connect(self._stack.setCurrentIndex)
 
-        body = QWidget()
-        body_layout = QHBoxLayout(body)
-        body_layout.setContentsMargins(0, 0, 0, 0)
-        body_layout.setSpacing(0)
-        body_layout.addWidget(self._nav)
-        body_layout.addWidget(Hairline(vertical=True))
-        body_layout.addWidget(self._stack, 1)
+        main = QWidget()
+        main.setObjectName("HubMain")
+        main_l = QVBoxLayout(main)
+        main_l.setContentsMargins(0, 0, 0, 0)
+        main_l.setSpacing(0)
+        main_l.addWidget(self._tabs)
+        main_l.addWidget(self._stack, 1)
 
-        content = QWidget()
-        content.setObjectName("ContentPane")
-        root = QVBoxLayout(content)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-        root.addWidget(self._header)
-        root.addWidget(body, 1)
-        self.setCentralWidget(content)
-
-    # ================= 基本 tab =================
-
-    def _build_basic_tab(self) -> QWidget:
-        self._dpi_spins: list[QSpinBox] = []
-        dpi_rows: list[QWidget] = []
-        self._dpi_count = safe_combo()
-        self._dpi_count.addItems([str(i) for i in range(1, 7)])
-        self._dpi_count.setMinimumWidth(88)
-        self._dpi_count.currentIndexChanged.connect(self._sync_dpi_enabled)
-        dpi_rows.append(labeled_row("有效档数", self._dpi_count))
-
-        self._dpi_stage = safe_combo()
-        self._dpi_stage.setMinimumWidth(88)
-        self._dpi_stage.activated.connect(
-            lambda: self._submit("dpi_stage", self._dpi_stage.currentIndex())
-        )
-        dpi_rows.append(labeled_row("当前档位", self._dpi_stage))
-
-        for i in range(6):
-            spin = QSpinBox()
-            spin.setRange(100, 52000)
-            spin.setSingleStep(50)
-            spin.setMinimumWidth(108)
-            spin.setGroupSeparatorShown(True)
-            self._dpi_spins.append(spin)
-            dpi_rows.append(labeled_row(f"第 {i + 1} 档", spin))
-
-        apply_dpi = QPushButton("应用 DPI")
-        apply_dpi.clicked.connect(self._apply_dpi)
-        dpi_rows.append(footer_row(apply_dpi))
-
-        self._rate = safe_combo()
-        self._rate.setMinimumWidth(108)
-        self._rate.activated.connect(
-            lambda: self._submit("rate", self._rate.currentIndex())
+        root = QWidget()
+        root.setObjectName("HubRoot")
+        layout = QHBoxLayout(root)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._sidebar)
+        layout.addWidget(main, 1)
+        self.setCentralWidget(root)
+        self._apply_style()
+        QGuiApplication.styleHints().colorSchemeChanged.connect(
+            lambda _: self._apply_style()
         )
 
-        self._lod = safe_combo()
-        self._lod.setMinimumWidth(108)
-        self._lod.activated.connect(lambda: self._apply_sensor())
-        self._game = safe_combo()
-        self._game.addItems(["模式 0", "模式 1", "模式 2"])
-        self._game.setMinimumWidth(108)
-        self._game.activated.connect(lambda: self._apply_sensor())
-        self._ripple = QCheckBox()
-        self._ripple.clicked.connect(lambda: self._apply_sensor())
-        self._line = QCheckBox()
-        self._line.clicked.connect(lambda: self._apply_sensor())
-        self._motion = QCheckBox()
-        self._motion.clicked.connect(lambda: self._apply_sensor())
+    def _apply_style(self) -> None:
+        self.setStyleSheet(window_stylesheet())
 
-        self._sleep = QSpinBox()
-        self._sleep.setRange(0, 255)
-        self._sleep.setSpecialValueText("从不")
-        self._sleep.setSuffix(" 分钟")
-        self._sleep.setMinimumWidth(108)
-        self._sleep.editingFinished.connect(
-            lambda: self._submit("sleep", self._sleep.value())
-        )
-        self._debounce = QSpinBox()
-        self._debounce.setRange(0, 20)
-        self._debounce.setMinimumWidth(108)
-        self._debounce.editingFinished.connect(
-            lambda: self._submit("debounce", self._debounce.value())
-        )
-
-        return page_column(
-            section_title("DPI"),
-            Card(*dpi_rows),
-            section_title("回报率"),
-            Card(labeled_row("回报率", self._rate)),
-            section_title("传感器"),
-            Card(
-                labeled_row("LOD", self._lod),
-                labeled_row("电竞模式", self._game),
-                labeled_row("波纹控制", self._ripple),
-                labeled_row("直线修正", self._line),
-                labeled_row("Motion Sync", self._motion),
-            ),
-            section_title("电源与按键"),
-            Card(
-                labeled_row("休眠", self._sleep),
-                labeled_row("按键防抖", self._debounce),
-            ),
-        )
-
-    def _sync_dpi_enabled(self) -> None:
-        count = self._dpi_count.currentIndex() + 1
-        for i, spin in enumerate(self._dpi_spins):
-            spin.setEnabled(i < count)
-
-    def _apply_dpi(self) -> None:
-        cfg = self._config()
-        if cfg is None:
-            return
-        count = self._dpi_count.currentIndex() + 1
-        dpis = tuple(spin.value() for spin in self._dpi_spins)
-        index = max(0, self._dpi_stage.currentIndex())
-        self._submit("dpi_table", dpis, count, index)
-
-    def _apply_sensor(self) -> None:
+    def _emit(self, *task: object) -> None:
         if self._updating:
             return
-        lod = self._lod.currentData()
-        if lod is None:
+        snap = self._snapshot
+        sleeping = snap is None or getattr(snap, "config", None) is None
+        if sleeping and task[0] != "factory_reset":
             return
-        self._submit(
-            "sensor",
-            {
-                "lod": lod,
-                "ripple": self._ripple.isChecked(),
-                "line": self._line.isChecked(),
-                "motion_sync": self._motion.isChecked(),
-                "game_mode": self._game.currentIndex(),
-            },
-        )
+        self._submit(*task)
 
-    # ================= 按键 tab =================
-
-    def _build_buttons_tab(self) -> QWidget:
-        self._button_combos: list[QComboBox] = []
-        rows: list[QWidget] = []
-        for i in range(6):
-            combo = safe_combo()
-            combo.setMinimumWidth(160)
-            combo.currentIndexChanged.connect(lambda _=0, i=i: self._on_button_combo(i))
-            rows.append(
-                labeled_row(BUTTON_NAMES.get(i, f"键{i}"), combo, stretch_control=True)
-            )
-            self._button_combos.append(combo)
-        add_row = QWidget()
-        add_layout = QHBoxLayout(add_row)
-        add_layout.setContentsMargins(0, 0, 0, 0)
-        add_btn = QPushButton("添加键盘按键")
-        add_btn.clicked.connect(self._add_keyboard_key)
-        add_layout.addWidget(add_btn)
-        add_layout.addStretch()
-        self._reload_button_combos()
-        return page_column(
-            section_title("按键映射"),
-            Card(*rows),
-            add_row,
-            caption("选择后立即写入鼠标。列表没有的键可点「添加键盘按键」录制。"),
-        )
-
-    def _combo_data(self, button_type: int, value: int) -> str:
-        return f"{button_type}:{value}"
-
-    def _parse_combo_data(self, data: object) -> tuple[int, int] | None:
-        if not isinstance(data, str) or ":" not in data:
-            return None
-        left, right = data.split(":", 1)
-        try:
-            return int(left), int(right)
-        except ValueError:
-            return None
-
-    def _reload_button_combos(
-        self, selected: list[tuple[int, int] | None] | None = None
-    ) -> None:
-        """用内置预设 + 已保存的自定义键重建六个下拉框。"""
-        if selected is None:
-            selected = [
-                self._parse_combo_data(c.currentData()) for c in self._button_combos
-            ]
-        extras = custom_keys.load_custom_keys()
-        for combo, current in zip(self._button_combos, selected, strict=True):
-            combo.blockSignals(True)
-            combo.clear()
-            for key, label in PRESET_LABELS.items():
-                if key in BUTTON_PRESETS:
-                    t, v = BUTTON_PRESETS[key]
-                    combo.addItem(label, self._combo_data(t, v))
-            if extras:
-                combo.insertSeparator(combo.count())
-                for item in extras:
-                    combo.addItem(
-                        item.label,
-                        self._combo_data(item.button_type, item.value),
-                    )
-            if current is not None:
-                data = self._combo_data(*current)
-                idx = combo.findData(data)
-                if idx < 0:
-                    combo.addItem(
-                        describe_button(
-                            ButtonBinding(
-                                button_type=current[0],
-                                button_index=0,
-                                value=current[1],
-                            )
-                        ),
-                        data,
-                    )
-                    idx = combo.findData(data)
-                if idx >= 0:
-                    combo.setCurrentIndex(idx)
-            combo.blockSignals(False)
-
-    def _on_button_combo(self, index: int) -> None:
-        if self._updating:
-            return
-        self._apply_button(index)
-
-    def _apply_button(self, index: int) -> None:
-        parsed = self._parse_combo_data(self._button_combos[index].currentData())
-        if parsed is None:
-            return
-        button_type, value = parsed
-        self._submit("button", index, button_type, value)
-
-    def _add_keyboard_key(self) -> None:
-        dlg = KeyCaptureDialog(self)
-        if dlg.exec() != QDialog.DialogCode.Accepted or dlg.captured is None:
-            return
-        button_type, value, label = dlg.captured
-        box = QMessageBox(self)
-        box.setWindowTitle("确认按键")
-        box.setText(f"检测到「{label}」。")
-        box.setInformativeText("是否加入下拉列表？")
-        box.setStandardButtons(
-            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel
-        )
-        box.setDefaultButton(QMessageBox.StandardButton.Save)
-        save_btn = box.button(QMessageBox.StandardButton.Save)
-        if save_btn is not None:
-            save_btn.setText("保存")
-        if box.exec() != QMessageBox.StandardButton.Save:
-            return
-        added = custom_keys.add_custom_key(label, button_type, value)
-        if added is None:
-            QMessageBox.information(
-                self, "已在列表中", f"「{label}」已经在下拉列表里。"
-            )
-            return
-        self._reload_button_combos()
-
-    # ================= 宏 tab =================
-
-    def _build_macro_tab(self) -> QWidget:
-        self._macro_key = safe_combo()
-        self._macro_key.addItems([BUTTON_NAMES.get(i, f"键{i}") for i in range(6)])
-        self._macro_key.setMinimumWidth(160)
-        self._macro_mode = safe_combo()
-        self._macro_mode.setMinimumWidth(160)
-        for key, label in TRIGGER_LABELS.items():
-            if key in TRIGGER_MODES:
-                self._macro_mode.addItem(label, key)
-        self._macro_name = QLineEdit("我的宏")
-        self._macro_name.setMinimumWidth(160)
-        self._macro_dsl = QLineEdit()
-        self._macro_dsl.setPlaceholderText("+a,delay:100,-a")
-        write_btn = QPushButton("写入宏")
-        write_btn.clicked.connect(self._apply_macro)
-        return page_column(
-            section_title("板载宏"),
-            Card(
-                labeled_row("目标键", self._macro_key),
-                labeled_row("触发方式", self._macro_mode),
-                labeled_row("宏名", self._macro_name, stretch_control=True),
-                labeled_row("事件", self._macro_dsl, stretch_control=True),
-                footer_row(write_btn),
-            ),
-            caption(DSL_HINT),
-        )
-
-    def _apply_macro(self) -> None:
-        try:
-            events = parse_events_dsl(self._macro_dsl.text(), _KEY_TOKENS)
-        except ValueError as exc:
-            QMessageBox.warning(self, "宏事件错误", str(exc))
-            return
-        mode_key = self._macro_mode.currentData()
-        if mode_key is None:
-            return
-        self._submit(
-            "macro",
-            self._macro_key.currentIndex(),
-            events,
-            TRIGGER_MODES[mode_key],
-            self._macro_name.text() or "macro",
-        )
-
-    # ================= 配置 tab =================
-
-    def _build_profiles_tab(self) -> QWidget:
-        save_wrap = QWidget()
-        save_layout = QHBoxLayout(save_wrap)
-        save_layout.setContentsMargins(12, 8, 12, 8)
-        save_layout.setSpacing(8)
-        self._profile_name = QLineEdit()
-        self._profile_name.setPlaceholderText("配置名，如：办公")
-        save_btn = QPushButton("保存当前")
-        save_btn.clicked.connect(self._save_profile)
-        save_layout.addWidget(self._profile_name)
-        save_layout.addWidget(save_btn)
-
-        self._profile_list = QListWidget()
-        self._profile_list.setMinimumHeight(180)
-        self._profile_list.setAttribute(Qt.WidgetAttribute.WA_MacShowFocusRect, False)
-        list_wrap = QWidget()
-        list_layout = QVBoxLayout(list_wrap)
-        list_layout.setContentsMargins(8, 8, 8, 8)
-        list_layout.addWidget(self._profile_list)
-
-        actions = QWidget()
-        actions_layout = QHBoxLayout(actions)
-        actions_layout.setContentsMargins(12, 8, 12, 8)
-        actions_layout.setSpacing(8)
-        for text, fn in (
-            ("应用", self._apply_profile),
-            ("删除", self._delete_profile),
-            ("导出…", self._export_profile),
-            ("导入…", self._import_profile),
-        ):
-            btn = QPushButton(text)
-            btn.clicked.connect(fn)
-            actions_layout.addWidget(btn)
-        actions_layout.addStretch()
-
-        self._reload_profiles()
-        return page_column(
-            section_title("本地配置"),
-            Card(save_wrap, list_wrap, actions),
-            caption("配置保存在本机，写入鼠标后断电仍然有效。"),
-        )
-
-    def _selected_profile(self) -> str | None:
-        item = self._profile_list.currentItem()
-        return item.text() if item else None
-
-    def _save_profile(self) -> None:
-        name = self._profile_name.text().strip()
-        if not name:
-            QMessageBox.warning(self, "提示", "请输入配置名")
-            return
-        self._submit("save_profile", name)
-        self._reload_profiles()
-
-    def _apply_profile(self) -> None:
-        name = self._selected_profile()
-        if not name:
-            return
-        try:
-            cfg = profiles.config_from_dict(profiles.load_profiles()[name])
-        except (KeyError, ValueError) as exc:
-            QMessageBox.warning(self, "配置无效", str(exc))
-            return
-        self._submit("apply_config", cfg)
-
-    def _delete_profile(self) -> None:
-        name = self._selected_profile()
-        if name:
-            profiles.delete_profile(name)
-            self._reload_profiles()
-
-    def _export_profile(self) -> None:
-        name = self._selected_profile()
-        if not name:
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "导出配置", f"{name}.json", "JSON (*.json)"
-        )
-        if path:
-            profiles.export_profile(name, Path(path))
-
-    def _import_profile(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "导入配置", "", "JSON (*.json)")
-        if not path:
-            return
-        try:
-            cfg = profiles.import_profile(Path(path))
-        except ValueError as exc:
-            QMessageBox.warning(self, "导入失败", str(exc))
-            return
-        self._submit("apply_config", cfg)
-
-    def _reload_profiles(self) -> None:
-        self._profile_list.clear()
-        self._profile_list.addItems(sorted(profiles.load_profiles()))
-
-    # ================= 状态回灌 =================
-
-    def _config(self) -> MouseConfig | None:
-        return self._snapshot.config if self._snapshot else None
+    def set_updating(self, updating: bool) -> None:
+        self._updating = updating
+        self._sidebar.set_updating(updating)
+        for page in self._pages:
+            page.set_updating(updating)
 
     def show_error(self, message: str) -> None:
-        self._header.set_error(message)
+        self._sidebar.show_error(message)
+        self._other.show_error(message)
 
     def on_snapshot(self, snap) -> None:  # noqa: ANN001 - 避免与 gui 循环导入
         self._snapshot = snap
-        cfg = snap.config
-        sleeping = cfg is None
-        self._header.set_device(
-            snap.variant.model,
-            f"{_role_name(snap.variant.role)} · 固件 {snap.firmware}",
-            snap.battery,
-            bool(snap.charge_status),
-            sleeping=sleeping,
-        )
-        if sleeping:
-            return
-        self._updating = True
+        self.setWindowTitle(snap.variant.model.replace("MCHOSE ", ""))
+        self.set_updating(True)
         try:
-            for i, spin in enumerate(self._dpi_spins):
-                spin.setValue(cfg.dpis[i])
-            self._dpi_count.setCurrentIndex(cfg.dpi_count - 1)
-            self._dpi_stage.clear()
-            self._dpi_stage.addItems([f"第 {i + 1} 档" for i in range(cfg.dpi_count)])
-            wired = snap.variant.role == "wired"
-            self._dpi_stage.setCurrentIndex(
-                cfg.usb_dpi_index if wired else cfg.g_dpi_index
-            )
-            self._sync_dpi_enabled()
-            rates = RATE_TABLES[snap.variant.rate_table]
-            self._rate.clear()
-            self._rate.addItems([f"{hz} Hz" for hz in rates])
-            self._rate.setCurrentIndex(
-                cfg.usb_rate_index if wired else cfg.g_rate_index
-            )
-            caps = MODEL_CAPS.get(snap.variant.model)
-            if caps and caps.lod_labels:
-                self._lod.clear()
-                for key, label in caps.lod_labels.items():
-                    self._lod.addItem(label, key)
-                lod = sensor_lod(cfg.sensor)
-                idx = self._lod.findData(lod)
-                self._lod.setCurrentIndex(max(idx, 0))
-            self._ripple.setChecked(sensor_ripple(cfg.sensor))
-            self._line.setChecked(sensor_line(cfg.sensor))
-            self._motion.setChecked(sensor_motion_sync(cfg.sensor))
-            self._game.setCurrentIndex(sensor_game_mode(cfg.sensor))
-            self._sleep.setValue(cfg.sleep_minutes)
-            self._debounce.setValue(cfg.key_debounce)
-            self._reload_button_combos([(b.button_type, b.value) for b in cfg.buttons])
-            for i, b in enumerate(cfg.buttons):
-                self._button_combos[i].setToolTip(describe_button(b))
+            self._sidebar.on_snapshot(snap)
+            self._dpi.on_snapshot(snap)
+            self._buttons.on_snapshot(snap)
+            self._perf.on_snapshot(snap)
+            self._other.on_snapshot(snap)
         finally:
-            self._updating = False
-
-
-def _role_name(role: str) -> str:
-    return {
-        "wired": "有线",
-        "receiver-1k": "2.4G（1K）",
-        "receiver-8k": "2.4G（8K）",
-    }.get(role, role)
+            self.set_updating(False)

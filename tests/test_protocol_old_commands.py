@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from mcmouse.protocol import old
@@ -30,7 +32,7 @@ CONFIG_PAYLOAD = (
     + bytes([0x01, 0x04, 0x00, 0x00])  # 键区4：index=0 type=1
     + bytes([0x00, 0x00, 0x00, 0x00])  # 键区5
     + bytes(5)  # reserved1-5
-    + bytes([0x02])  # rotateVal=2 → 8°
+    + bytes([0x02])  # rotateVal=2 → 2°
     + bytes([0xFF])  # val
     + b"".join(d.to_bytes(2, "little") for d in (400, 800, 1600, 3200, 6400, 26000))
 )
@@ -65,7 +67,7 @@ def test_parse_config() -> None:
     assert cfg.buttons[4] == old.ButtonBinding(
         button_type=1, button_index=0, value=0x040000
     )
-    assert cfg.rotate_degrees == 8
+    assert cfg.rotate_degrees == 2
     assert cfg.val == 0xFF
     assert cfg.dpi_vals == cfg.dpis
 
@@ -122,7 +124,41 @@ def test_build_write_rate() -> None:
     assert _decode(old.build_write_rate(1, wired=False))[:3] == bytes([0x41, 0, 1])
 
 
-def test_build_write_sensor() -> None:
+def test_encode_rotate() -> None:
+    """rotateVal 就是度数本身：真机与官方软件互读验证（kb/0010）。"""
+    assert old.encode_rotate(0) == (0, 0)
+    assert old.encode_rotate(12) == (1, 12)
+    assert old.encode_rotate(-12) == (1, 244)
+    assert old.encode_rotate(1) == (1, 1)
+    assert old.encode_rotate(30) == (1, 30)
+
+
+def test_rotate_roundtrip_and_quantize() -> None:
+    """编码→回读必须还原同一角度，正负两侧都要对称。"""
+    for degrees in range(-old.ROTATE_MAX_DEGREES, old.ROTATE_MAX_DEGREES + 1):
+        rotate_open, raw = old.encode_rotate(degrees)
+        assert raw <= old.ROTATE_MAX_STEPS or raw >= 256 - old.ROTATE_MAX_STEPS
+        cfg = replace(
+            old.parse_config(CONFIG_PAYLOAD), rotate_raw=raw if rotate_open else 0
+        )
+        assert cfg.rotate_degrees == degrees
+        assert old.quantize_rotate(degrees) == degrees
+    assert old.quantize_rotate(999) == old.ROTATE_MAX_DEGREES  # 超量程收口
+    assert old.quantize_rotate(-999) == -old.ROTATE_MAX_DEGREES
+
+
+def test_write_sensor_from_config_rotate() -> None:
+    cfg = old.parse_config(CONFIG_PAYLOAD)
+    raw = _decode(old.build_write_sensor_from_config(cfg, rotate_degrees=12))
+    assert raw[0] == old.CMD_WRITE_SENSOR
+    assert raw[8] == 1  # rotate_open
+    assert raw[9] == 12  # rotateVal 即度数
+
+    # 不传角度时必须原样沿用设备读回的 rotateVal，不能被改写
+    kept = _decode(old.build_write_sensor_from_config(cfg, ripple=True))
+    assert kept[8] == 1
+    assert kept[9] == cfg.rotate_raw
+
     raw = _decode(
         old.build_write_sensor(
             lod=1,

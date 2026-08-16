@@ -13,7 +13,7 @@
 | 0007 | [踩坑：旧协议读路径的三个真机坑](pitfalls/0007-old-protocol-read-pitfalls.md) | pitfalls | verified | 2026-08-08 |
 | 0008 | [踩坑：macOS 27 上 Qt 托盘菜单必崩与绕行](pitfalls/0008-qt-tray-crash-macos27.md) | pitfalls | verified | 2026-08-09 |
 | 0009 | [踩坑：打包 .app / DMG 的三个坑](pitfalls/0009-macos-app-packaging-pitfalls.md) | pitfalls | verified | 2026-08-14 |
-| 0010 | [踩坑：角度旋转的单位误读、顺带改写与盘面误触](pitfalls/0010-rotate-write-pitfalls.md) | pitfalls | verified | 2026-08-15 |
+| 0010 | [踩坑：角度旋转的单位误读、顺带改写、0° 编码与盘面误触](pitfalls/0010-rotate-write-pitfalls.md) | pitfalls | verified | 2026-08-16 |
 
 ## 分类目录
 

@@ -549,8 +549,9 @@ ROTATE_LIMIT = ROTATE_MAX_DEGREES  # 与线上量程一致，±30°
 ROTATE_MAJOR = 10  # 带数字的长刻度间隔
 _SWEEP = 250.0  # 整个量程占的屏幕弧度
 _MINOR_TICK = 2  # 每 2° 一根细刻度，避免 1° 一根糊成一片
-_KNOB_GRAB = 20.0  # 圆钮的抓取半径
-_RING_GRAB = 22.0  # 刻度环的抓取带宽（相对半径）
+_KNOB_GRAB = 14.0  # 圆钮的抓取半径（可见半径 11px + 少量余量）
+_RING_GRAB = 10.0  # 刻度环的抓取带宽（相对半径）
+_ZERO_DETENT = 1.0  # 0° 磁吸半宽：指针落点 ±1° 内都算 0，保证能稳稳停在 0
 
 
 def _rotate_angle(degrees: float) -> float:
@@ -569,6 +570,15 @@ def _snap_rotate(degrees: float) -> int:
     return max(-ROTATE_LIMIT, min(ROTATE_LIMIT, stepped))
 
 
+def _detent_zero(degrees: float) -> float:
+    """0° 磁吸：指针落点在 ±_ZERO_DETENT 内视为 0。
+
+    1° 在盘面上只有 ~6px，没有磁吸几乎不可能停在 0 上。
+    代价是盘面拖动设不出 ±1°，用两侧步进按钮可达（kb/0010 §5）。
+    """
+    return 0.0 if abs(degrees) <= _ZERO_DETENT else degrees
+
+
 class _RotateDial(QWidget):
     """刻度盘本体：刻度环 + 可拖动的圆钮 + 中心角度读数。"""
 
@@ -580,6 +590,7 @@ class _RotateDial(QWidget):
         self._degrees = 0
         self._dragging = False
         self._drag_from = 0
+        self._drag_offset = 0.0
         self.setMinimumSize(210, 210)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMouseTracking(True)  # 悬停到可拖动区域才变手型
@@ -591,8 +602,11 @@ class _RotateDial(QWidget):
         """显示设备读回的角度：原样保留，不做吸附与截断。
 
         盘面量程与线上量程一致（±30°），超出说明解码有误，按量程收口，
-        圆钮停在端点，以免显示出荒唐角度。
+        圆钮停在端点，以免显示出荒唐角度。拖动进行中忽略回填，
+        否则 60s 轮询快照会把用户手里的圆钮拽走。
         """
+        if self._dragging:
+            return
         self._degrees = max(-ROTATE_MAX_DEGREES, min(ROTATE_MAX_DEGREES, int(degrees)))
         self.update()
 
@@ -621,7 +635,8 @@ class _RotateDial(QWidget):
         c = self._center()
         return QPointF(c.x() + radius * math.cos(rad), c.y() - radius * math.sin(rad))
 
-    def _value_at(self, pos: QPointF) -> int:
+    def _value_at_float(self, pos: QPointF) -> float:
+        """指针位置 → 未吸附的角度值（浮点）。"""
         c = self._center()
         angle = math.degrees(math.atan2(c.y() - pos.y(), pos.x() - c.x())) % 360.0
         lo, hi = _rotate_angle(ROTATE_LIMIT) % 360.0, _rotate_angle(-ROTATE_LIMIT)
@@ -630,23 +645,31 @@ class _RotateDial(QWidget):
             angle = lo if angle - hi > lo - angle else hi
         if angle >= lo:
             angle -= 360.0
-        return _snap_rotate((90.0 - angle) / (_SWEEP / (ROTATE_LIMIT * 2)))
+        return (90.0 - angle) / (_SWEEP / (ROTATE_LIMIT * 2))
+
+    def _value_at(self, pos: QPointF) -> int:
+        return _snap_rotate(_detent_zero(self._value_at_float(pos)))
 
     # ---------- 交互 ----------
+
+    def _on_knob(self, pos: QPointF) -> bool:
+        radius = self._radius()
+        knob = self._point_at(self._knob_degrees(), radius + 2)
+        return math.hypot(pos.x() - knob.x(), pos.y() - knob.y()) <= _KNOB_GRAB
 
     def _is_grab(self, pos: QPointF) -> bool:
         """只有按在圆钮上或刻度环附近才算拖动。
 
         控件矩形远大于刻度环，若整块都能拖，点一下卡片空白处圆钮就会跳到
-        那个方位（并顺带下发一次写）。
+        那个方位（并顺带下发一次写）。命中带宽必须贴近可见元素：
+        圆钮可见半径 11px、刻度最多伸进环内 15px，带子再宽就会把
+        「看起来空白」的地方也算进来，误触跳角度（kb/0010 §3/§5）。
         """
-        radius = self._radius()
-        knob = self._point_at(self._knob_degrees(), radius + 2)
-        if math.hypot(pos.x() - knob.x(), pos.y() - knob.y()) <= _KNOB_GRAB:
+        if self._on_knob(pos):
             return True
         c = self._center()
         dist = math.hypot(pos.x() - c.x(), pos.y() - c.y())
-        if abs(dist - radius) > _RING_GRAB:
+        if abs(dist - self._radius()) > _RING_GRAB:
             return False
         return self._within_sweep(pos)
 
@@ -666,6 +689,12 @@ class _RotateDial(QWidget):
             return
         self._dragging = True
         self._drag_from = self._degrees
+        if self._on_knob(pos):
+            # 抓的是圆钮：保留指针相对圆钮的角差，拖动时圆钮不会瞬移到指针下。
+            # 否则 1° 只有 ~6px，按下瞬间指针偏一点，值就跳 ±1~3°（kb/0010 §5）。
+            self._drag_offset = self._value_at_float(pos) - self._knob_degrees()
+        else:
+            self._drag_offset = 0.0  # 点刻度环：绝对跳到落点角度
         self._apply_drag(pos)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: ANN001
@@ -687,7 +716,10 @@ class _RotateDial(QWidget):
             self.committed.emit(self._degrees)
 
     def _apply_drag(self, pos: QPointF) -> None:
-        if self.set_user_degrees(self._value_at(pos)):
+        target = _snap_rotate(
+            _detent_zero(self._value_at_float(pos) - self._drag_offset)
+        )
+        if self.set_user_degrees(target):
             self.moved.emit(self._degrees)
 
     # ---------- 绘制 ----------

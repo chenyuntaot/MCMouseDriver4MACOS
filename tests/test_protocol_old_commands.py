@@ -125,8 +125,12 @@ def test_build_write_rate() -> None:
 
 
 def test_encode_rotate() -> None:
-    """rotateVal 就是度数本身：真机与官方软件互读验证（kb/0010）。"""
-    assert old.encode_rotate(0) == (0, 0)
+    """rotateVal 就是度数本身：真机与官方软件互读验证（kb/0010）。
+
+    rotateOpen 恒为 1：官方驱动设 0° 也发 (1, 0)（kb/0010 §4）。
+    曾对 0° 发 (0, 0)，设备 byte49 会读回 0xFF、解码成 -1°。
+    """
+    assert old.encode_rotate(0) == (1, 0)
     assert old.encode_rotate(12) == (1, 12)
     assert old.encode_rotate(-12) == (1, 244)
     assert old.encode_rotate(1) == (1, 1)
@@ -158,6 +162,14 @@ def test_write_sensor_from_config_rotate() -> None:
     kept = _decode(old.build_write_sensor_from_config(cfg, ripple=True))
     assert kept[8] == 1
     assert kept[9] == cfg.rotate_raw
+
+    # 设备在 0° 时改其他性能项，也必须带 rotateOpen=1、rotateVal=0，
+    # 不能发 (0, 0) 把设备推进 byte49=0xFF 的脏状态（kb/0010 §4）
+    zero = _decode(
+        old.build_write_sensor_from_config(replace(cfg, rotate_raw=0), ripple=True)
+    )
+    assert zero[8] == 1
+    assert zero[9] == 0
 
     raw = _decode(
         old.build_write_sensor(

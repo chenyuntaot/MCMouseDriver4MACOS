@@ -176,20 +176,19 @@ def encode_rotate(degrees: int) -> tuple[int, int]:
     """度数 → (rotate_open, rotate_val)。单位 1°，负值 +256（kb/0005 §3.3）。
 
     量程限制在 ±30°，与读回「>30 视为负值」的阈值对齐。
+    rotateOpen 恒为 1：官方驱动清零/设 0° 也发 (1, 0)，从不发 0
+    （bundle 135497-135502，kb/0010 §4）。曾对 0° 发 (0, 0)，设备会进入
+    未定义状态，byte49 读回 0xFF、解码成 -1°，界面表现为「设 0 跳 -1」。
     """
     steps = int(round(degrees / ROTATE_UNIT_DEGREES))
     steps = max(-ROTATE_MAX_STEPS, min(ROTATE_MAX_STEPS, steps))
-    if steps == 0:
-        return 0, 0
     raw = steps + 256 if steps < 0 else steps
     return 1, raw & 0xFF
 
 
 def quantize_rotate(degrees: int) -> int:
     """写入后实际生效的角度：受 1° 步进与 ±30° 量程限制（kb/0005 §3.3）。"""
-    rotate_open, raw = encode_rotate(degrees)
-    if not rotate_open:
-        return 0
+    _rotate_open, raw = encode_rotate(degrees)
     steps = raw - 256 if raw > ROTATE_MAX_STEPS else raw
     return steps * ROTATE_UNIT_DEGREES
 
@@ -320,7 +319,7 @@ def build_write_sensor(
     """写性能参数（0x11 0x42，kb/0005 §3.3）。
 
     ripple/line/motion_sync 用 SWITCH_ON/SWITCH_OFF；game_mode 1/2/3；
-    rotate_val = 度数/4，负值 +256。
+    rotate_val 就是度数（1°/步），负值 +256，rotateOpen 恒为 1（kb/0010 §4）。
     """
     args = bytes(
         [lod, ripple, line, motion_sync, 0, 0, game_mode, rotate_open, rotate_val]
@@ -379,8 +378,9 @@ def build_write_sensor_from_config(
     # 读回 0/1/2（位掩码），写入 1/2/3（kb/0005 §3.3）
     game_v = sensor_game_mode(sensor) if game_mode is None else game_mode
     if rotate_degrees is None:
-        rotate_open = 1 if cfg.rotate_raw else 0
-        rotate_val = cfg.rotate_raw if rotate_open else 0
+        # 原样沿用设备读回值；rotateOpen 恒为 1，0° 也不例外（kb/0010 §4），
+        # 否则设备会进入 byte49 读回 0xFF 的未定义状态
+        rotate_open, rotate_val = 1, cfg.rotate_raw
     else:
         rotate_open, rotate_val = encode_rotate(rotate_degrees)
     return build_write_sensor(

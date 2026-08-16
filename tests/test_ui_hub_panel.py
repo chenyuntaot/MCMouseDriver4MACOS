@@ -213,14 +213,63 @@ def test_assign_row_click_selects_button(tmp_path: Path, monkeypatch) -> None:  
 
 
 def test_rotate_dial_maps_position_to_degrees(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
-    """刻度盘上的落点必须能反解回同一角度，保证拖动与绘制一致。"""
+    """刻度盘上的落点必须能反解回同一角度，保证拖动与绘制一致。
+
+    ±1° 落点被 0° 磁吸吃掉（见下一条用例），这里用 ±2° 以外的值。
+    """
     panel, _tasks = _panel(tmp_path, monkeypatch)
     dial = panel._perf._rotate._dial
     dial.resize(240, 240)
-    for degrees in (-30, -12, -1, 0, 7, 30):
+    for degrees in (-30, -12, -2, 0, 2, 7, 30):
         dial.set_degrees(degrees)
         knob = dial._point_at(degrees, dial._radius())
         assert dial._value_at(knob) == degrees
+
+
+def test_rotate_dial_zero_detent(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    """指针落在 0° 附近（±1° 内）必须稳稳算 0，不能跳到 ±1°（kb/0010 §5）。"""
+    panel, _tasks = _panel(tmp_path, monkeypatch)
+    dial = panel._perf._rotate._dial
+    dial.resize(240, 240)
+    for degrees in (-0.8, -0.4, 0.0, 0.4, 0.8):
+        spot = dial._point_at(degrees, dial._radius())
+        assert dial._value_at(spot) == 0
+    assert dial._value_at(dial._point_at(1.5, dial._radius())) == 2
+    assert dial._value_at(dial._point_at(-1.5, dial._radius())) == -2
+
+
+def test_click_knob_without_move_keeps_angle(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    """按在圆钮上（哪怕偏了几像素）不挪动就松手：角度不变、不下发写。
+
+    抓取改为保留指针-圆钮角差后，按下瞬间不再瞬移（kb/0010 §5）。
+    """
+    panel, tasks = _panel(tmp_path, monkeypatch)
+    dial = panel._perf._rotate._dial
+    dial.resize(240, 240)
+    dial.set_degrees(0)
+    tasks.clear()
+    knob = dial._point_at(0, dial._radius() + 2)
+    # 偏 4px 的落点：旧实现会把值抢到 -1°，新实现保持 0°
+    off = QPointF(knob.x() - 4.0, knob.y())
+    dial.mousePressEvent(_press(off))
+    assert dial._dragging is True
+    dial.mouseReleaseEvent(None)
+    assert dial.degrees() == 0
+    assert tasks == []
+
+
+def test_snapshot_ignored_while_dragging_dial(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    """拖动进行中，轮询快照回填不能把圆钮拽走。"""
+    panel, _tasks = _panel(tmp_path, monkeypatch)
+    dial = panel._perf._rotate._dial
+    dial.resize(240, 240)
+    dial.set_degrees(5)
+    dial._dragging = True
+    panel.on_snapshot(_snap(config=replace(SAMPLE, rotate_raw=20)))
+    assert dial.degrees() == 5
+    dial._dragging = False
+    dial.set_degrees(20)
+    assert dial.degrees() == 20
 
 
 def test_rotate_degrees_written_verbatim(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
